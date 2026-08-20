@@ -1,4 +1,8 @@
+import { EventEmitter } from 'events';
+import crypto from 'node:crypto';
 import { ixcService } from '../ixc/ixc.service.js';
+import { notificationsService } from '../notifications/notifications.service.js';
+import { CONFIG } from '../../config/env.js';
 
 export interface FormattedInvoice {
   id: string;
@@ -14,9 +18,23 @@ export interface FormattedInvoice {
   pixCopiaECola: string;
   obs?: string;
   isOverdue: boolean;
+  simulated?: boolean;
+}
+
+export interface PixWebhookPayload {
+  event?: string;
+  invoiceId: string;
+  clientId: string;
+  txid?: string;
+  endToEndId?: string;
+  amount?: number;
+  paidAt?: string;
 }
 
 export class FinancialService {
+  public pixEvents = new EventEmitter();
+  private readonly processedPixEvents = new Map<string, number>();
+
   /**
    * Busca e formata faturas do cliente no IXC
    */
@@ -24,8 +42,11 @@ export class FinancialService {
     const rawInvoices = await ixcService.getClientInvoices(clientId);
 
     return rawInvoices.map((inv) => {
-      const valorNum = parseFloat(inv.valor || inv.valor_aberto || '100.00');
-      
+      const valorNum = parseFloat(inv.valor || inv.valor_aberto || '');
+      if (!Number.isFinite(valorNum) || valorNum < 0) {
+        throw new Error('IXC retornou uma fatura sem valor válido. Pagamento não pode ser confirmado.');
+      }
+
       // Validação de vencimento precisa com base no final do dia de vencimento (23:59:59)
       const parts = (inv.data_vencimento || '').split('-').map(Number);
       let isOverdue = false;
@@ -34,10 +55,11 @@ export class FinancialService {
         isOverdue = dueEndOfDay.getTime() < Date.now() && inv.status === 'A';
       }
 
-      // Gera linha digitável de fallback caso a base IXC demo não tenha gerado
-      const rawLinha = inv.linha_digitavel || '04790000020000014569803047711654260000010000';
+      // A linha/Pix só pode ser exibida quando fornecida pelo ERP. The demo
+      // adapter is the only place where a visibly simulated payload is made.
+      const rawLinha = inv.linha_digitavel || '';
       const linhaFormatada = this.formatLinhaDigitavel(rawLinha);
-      const pixPayload = this.generatePixPayload(inv.id, valorNum);
+      const pixPayload = inv.pix_copia_e_cola || (CONFIG.demoMode ? this.generatePixPayload(inv.id, valorNum) : '');
 
       return {
         id: inv.id,
@@ -53,6 +75,7 @@ export class FinancialService {
         pixCopiaECola: pixPayload,
         obs: inv.obs,
         isOverdue,
+        simulated: CONFIG.demoMode,
       };
     });
   }
@@ -69,25 +92,22 @@ export class FinancialService {
    */
   async getInvoicePdf(invoiceId: string, clientId = '2270'): Promise<{ filename: string; buffer: Buffer; contentType: string }> {
     const invoices = await this.getInvoicesByClientId(clientId);
-    const invoice = invoices.find((i) => i.id === invoiceId) || invoices[0] || {
-      id: invoiceId,
-      documento: invoiceId,
-      valor: 119.90,
-      valorFormatado: 'R$ 119,90',
-      dataEmissao: '2026-08-10',
-      dataVencimento: '2026-09-10',
-      dataVencimentoFormatada: '10/09/2026',
-      status: 'PENDENTE',
-      linhaDigitavel: '04790000020000014569803047711654260000011990',
-      linhaDigitavelFormatada: '04790.00002 00000.145698 03047.711654 2 60000011990',
-      pixCopiaECola: '00020126580014br.gov.bcb.pix...',
-      isOverdue: false,
-    };
+    const invoice = invoices.find((i) => i.id === invoiceId);
+    if (!invoice) {
+      const error = new Error('Boleto não encontrado para o cliente autenticado.');
+      (error as Error & { code?: string }).code = 'INVOICE_NOT_FOUND';
+      throw error;
+    }
 
     const client = await ixcService.findClientById(clientId);
-    const clientName = client?.razao || 'Emanuel da Silva';
-    const clientDoc = client?.cnpj_cpf || '154.293.707-89';
-    const clientAddress = `${client?.endereco || 'Av. Brasil'}, ${client?.numero || '1500'} - ${client?.bairro || 'Centro'}, ${client?.cidade || 'Chapeco'} - SC`;
+    if (!client && !CONFIG.demoMode) {
+      const error = new Error('Dados do cliente indisponíveis no ERP; boleto não pode ser emitido.');
+      (error as Error & { code?: string }).code = 'IXC_UNAVAILABLE';
+      throw error;
+    }
+    const clientName = client?.razao || 'Cliente de demonstração';
+    const clientDoc = client?.cnpj_cpf || 'DADOS-DEMO';
+    const clientAddress = `${client?.endereco || 'Endereço de demonstração'}, ${client?.numero || '0'} - ${client?.bairro || 'Demonstração'}, ${client?.cidade || 'Demonstração'} - SC`;
 
     const pdfBuffer = this.buildBoletoPdfBuffer(invoice, clientName, clientDoc, clientAddress);
     return {
@@ -251,7 +271,7 @@ ET
     const barHeights = 50;
     const yPos = 300;
     const pattern = [2, 1, 3, 1, 1, 4, 2, 1, 3, 2, 1, 1, 4, 1, 2, 3, 1, 2, 4, 1, 3, 1, 2, 1, 4, 2, 3, 1, 1, 2, 4, 1, 3, 2, 1, 4, 2, 1, 3, 1, 2, 4, 1, 3, 1, 2, 4, 2, 1, 3, 1, 2, 3, 1, 4, 1, 2, 3, 2, 1, 4, 1, 2, 3, 1, 4, 2, 1, 3, 2, 1, 4, 1, 2, 3, 1, 2, 4, 1, 3, 2, 1, 4, 1, 2, 3, 1, 4, 2, 1, 3, 1, 2, 4, 2, 1];
-    
+
     for (let i = 0; i < pattern.length; i++) {
       const barWidth = pattern[i];
       if (i % 2 === 0) {
@@ -344,7 +364,85 @@ Q
     const lengthStr = valorStr.length.toString().padStart(2, '0');
     return `00020126580014br.gov.bcb.pix0136dbstelecom-${invoiceId}-pix@dbstelecom.com.br52040000530398654${lengthStr}${valorStr}5802BR5911DBS TELECOM6007CHAPECO62070503***6304`;
   }
+
+  /**
+   * Processa webhook de liquidação instantânea de PIX recebido do Gateway Bancário
+   */
+  async processPixWebhook(payload: PixWebhookPayload): Promise<{ success: boolean; invoiceId: string; status: string }> {
+    if (!payload.invoiceId || !payload.clientId) {
+      throw new Error('Payload inválido: invoiceId e clientId são obrigatórios.');
+    }
+
+    const amount = Number(payload.amount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      throw new Error('Payload inválido: amount deve ser um valor positivo.');
+    }
+
+    const paidAt = payload.paidAt || new Date().toISOString();
+    const eventData = {
+      event: 'PIX_CONFIRMED',
+      invoiceId: payload.invoiceId,
+      clientId: payload.clientId,
+      amount,
+      paidAt,
+      message: 'Fatura Paga com Sucesso!',
+    };
+
+    // Dispara evento reativo para conexões SSE ativas
+    this.pixEvents.emit(`pix:${payload.clientId}`, eventData);
+    this.pixEvents.emit(`pix:invoice:${payload.invoiceId}`, eventData);
+
+    // Registra notificação push para o assinante
+    try {
+      await notificationsService.sendNotification({
+        clientId: payload.clientId,
+        type: 'SYSTEM_NOTICE',
+        title: '✅ Pagamento PIX Confirmado!',
+        body: `Sua fatura #${payload.invoiceId} foi compensada com sucesso. Seu sinal e benefícios estão 100% liberados!`,
+        actionType: 'VIEW_INVOICE',
+        actionPayload: payload.invoiceId,
+      });
+    } catch (e) {
+      console.warn('[FinancialService] Não foi possível salvar notificação do PIX:', e);
+    }
+
+    return {
+      success: true,
+      invoiceId: payload.invoiceId,
+      status: 'PAGO',
+    };
+  }
+
+  /**
+   * Verifies the HMAC signature over the exact request bytes. Callers must
+   * still enforce a timestamp and event-id replay window around this check.
+   */
+  verifyPixWebhookSignature(rawBody: Buffer | string, signature: string | undefined): boolean {
+    if (!CONFIG.pix.webhookSecret || !signature) return false;
+    const provided = signature.trim().replace(/^sha256=/i, '');
+    if (!/^[a-f0-9]{64}$/i.test(provided)) return false;
+    const expected = crypto.createHmac('sha256', CONFIG.pix.webhookSecret)
+      .update(rawBody)
+      .digest('hex');
+    const providedBuffer = Buffer.from(provided, 'hex');
+    const expectedBuffer = Buffer.from(expected, 'hex');
+    return providedBuffer.length === expectedBuffer.length && crypto.timingSafeEqual(providedBuffer, expectedBuffer);
+  }
+
+  /** Claims an external event id once for the replay-protection window. */
+  claimPixEvent(eventId: string, now = Date.now(), ttlMs = 10 * 60 * 1000): boolean {
+    for (const [id, expiresAt] of this.processedPixEvents) {
+      if (expiresAt <= now) this.processedPixEvents.delete(id);
+    }
+    if (!eventId || this.processedPixEvents.has(eventId)) return false;
+    this.processedPixEvents.set(eventId, now + ttlMs);
+    return true;
+  }
+
+  /** Useful for isolated tests without exposing the internal replay map. */
+  clearPixEventClaims(): void {
+    this.processedPixEvents.clear();
+  }
 }
 
 export const financialService = new FinancialService();
-

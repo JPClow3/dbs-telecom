@@ -4,7 +4,7 @@ Este documento é um roteiro estruturado passo a passo para orientar a apresenta
 
 ---
 
-## 1. Matriz de Avaliação Oficial (100% de Conformidade)
+## 1. Matriz de Avaliação para a Apresentação
 
 | Critério de Avaliação | Peso | O que Demonstrar na Prática | Seção do Roteiro |
 | :--- | :---: | :--- | :---: |
@@ -12,7 +12,7 @@ Este documento é um roteiro estruturado passo a passo para orientar a apresenta
 | **2. Integração com API da IXC** | **25%** | Consultas reais a `/cliente`, `/fn_areceber`, `/cliente_contrato` e `/su_oss_chamado` (login padrão = CPF). | Partes 2 e 3 |
 | **3. Funcionamento do Chat / IA** | **15%** | Processamento em linguagem natural pelo Google Gemini com injeção do contexto do IXC e respostas amigáveis. | Parte 2 |
 | **4. Classificação dos Setores** | **10%** | Roteamento automático para Comercial, Suporte e Financeiro com badge visual e cards interativos. | Parte 2 |
-| **5. Qualidade do Código & Arquitetura** | **10%** | Padrão BFF, Clean Architecture, TypeScript estrito, modularidade e suíte de 44 testes Vitest. | Parte 3 |
+| **5. Qualidade do Código & Arquitetura** | **10%** | Padrão BFF, TypeScript estrito e suíte atual do backend; confirme a contagem executando `npm test`. | Parte 3 |
 | **6. Segurança das Informações** | **5%** | Isolamento total de tokens no BFF, esteira de 4 Guardrails (Anti-Jailbreak, Escopo, LGPD e Zod). | Partes 2 e 3 |
 | **7. Interface e Experiência do Usuário** | **5%** | Design system oficial DBS Telecom (Laranja Vibrante `#F84B03`, Laranja `#FB8200`, Cinza Escuro `#4B4C51`, Branco `#FFFFFF`), feedback visual e cópia em 1 clique. | Parte 2 |
 | **8. Documentação e Apresentação** | **5%** | 7 manuais técnicos completos, diagramas Mermaid, Swagger e roteiro de apresentação estruturado. | Parte 1 e 3 |
@@ -26,7 +26,7 @@ timeline
     title Linha do Tempo da Apresentação (12 a 15 Minutos)
     00:00 - 03:00 : Parte 1 - Introdução, Problema & Arquitetura BFF
     03:00 - 10:00 : Parte 2 - Demonstração Ao Vivo dos 4 Fluxos e Guardrails
-    10:00 - 13:00 : Parte 3 - Diferenciais Técnicos, Código & 44 Testes
+    10:00 - 13:00 : Parte 3 - Diferenciais Técnicos, Código & Testes
     13:00 - 15:00 : Parte 4 - Encerramento e Perguntas da Banca
 ```
 
@@ -45,7 +45,7 @@ timeline
 #### O que Mostrar na Tela:
 * Mostre a tela inicial do aplicativo no navegador ou emulador com a identidade visual da **DBS Telecom**.
 * Explique brevemente o diagrama de arquitetura:
-  - **Mobile:** React Native com Expo SDK 51 e TypeScript.
+  - **Mobile:** React Native 0.86 com Expo SDK 57 e TypeScript.
   - **BFF:** Node.js + Express com arquitetura híbrida de IA em 4 níveis (Fast Router + Guardrails + Gemini + Context Builder + Fallback Heurístico).
   - **ERP:** IXC Soft WebService v1.
 
@@ -132,7 +132,7 @@ Abra o terminal no diretório `backend` e execute:
 ```bash
 npm test
 ```
-* **Destaque:** Demonstre a suíte com **44 testes automatizados** passando com 100% de sucesso em ~4.1 segundos (testes do conector IXC, Guardrails, Fast Router, UserService e validação Zod).
+* **Destaque:** Demonstre a suíte atual executando no ambiente configurado. Separe resultados locais de smoke tests do IXC/Gemini e não apresente uma execução verde como prova de produção.
 
 #### 2. Visualização do Context Bundle RAG do IXC
 Abra no navegador a URL:
@@ -145,7 +145,7 @@ http://localhost:3000/api/ai/context/2270
 
 ### Parte 4: Encerramento (2 minutos)
 * Resuma os principais diferenciais entregues:
-  - **100% dos requisitos do Desafio Técnico atendidos.**
+  - **Requisitos demonstrados e pendências de produção explicitadas.**
   - **Arquitetura BFF com isolamento total de credenciais.**
   - **Sistema Híbrido de IA com Fast Router (<5ms), Gemini e Fallback Offline.**
   - **Integração real com o ERP IXC Soft WebService v1.**
@@ -158,6 +158,6 @@ http://localhost:3000/api/ai/context/2270
 
 | Possível Imprevisto | Solução Imediata durante a Apresentação |
 | :--- | :--- |
-| **Expo Go não conecta no celular** | Pressione a tecla **`w`** no terminal do Expo para alternar instantaneamente para o **Web Preview** no navegador (funciona 100% idêntico ao mobile). |
+| **Expo Go não conecta no celular** | Pressione a tecla **`w`** no terminal do Expo para abrir o **Web Preview**; valide também o comportamento nativo antes de declarar o release pronto. |
 | **Sem conexão com a internet / Falha de API externa** | O sistema possui **Fallback Heurístico Offline** embutido tanto no backend quanto no frontend móvel (`api.ts`). A apresentação continua perfeitamente sem falhas. |
 | **Verificação de Saúde do Backend** | Acesse `http://localhost:3000/api/health` para confirmar o status online do servidor e do provedor de IA. |

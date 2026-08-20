@@ -7,9 +7,9 @@ import { WifiOff, RefreshCw } from 'lucide-react-native';
 import { hapticFeedback } from '../utils/haptics';
 
 export const OfflineBanner: React.FC = () => {
-  const { isConnected } = useNetworkStatus();
+  const { isConnected, isInternetReachable, refresh } = useNetworkStatus();
   const { colors, isDark } = useAppTheme();
-  const isOffline = !isConnected;
+  const isOffline = !isConnected || isInternetReachable === false;
 
   const translateY = useRef(new Animated.Value(-50)).current;
   const opacity = useRef(new Animated.Value(0)).current;
@@ -49,8 +49,9 @@ export const OfflineBanner: React.FC = () => {
     return null;
   }
 
-  const handleRetry = () => {
+  const handleRetry = async () => {
     hapticFeedback.light();
+    await refresh?.();
   };
 
   return (
@@ -75,7 +76,7 @@ export const OfflineBanner: React.FC = () => {
             Sem conexão com a internet
           </Text>
           <Text style={[styles.subtitle, { color: isDark ? '#CBD5E1' : colors.textSecondary }]}>
-            Modo offline ativo • Recursos locais disponíveis
+            Dados locais podem estar incompletos • nada é confirmado sem conexão
           </Text>
         </View>
 
@@ -83,6 +84,9 @@ export const OfflineBanner: React.FC = () => {
           style={[styles.retryBtn, { backgroundColor: colors.primary }]}
           onPress={handleRetry}
           activeOpacity={0.8}
+          accessibilityRole="button"
+          accessibilityLabel="Tentar reconectar"
+          accessibilityHint="Verificar novamente a conexão com a internet"
         >
           <RefreshCw size={11} color={colors.white} strokeWidth={2.5} />
           <Text style={styles.retryText}>Reconectar</Text>

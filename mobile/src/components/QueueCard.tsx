@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -6,14 +6,18 @@ import {
   StyleSheet,
   ActivityIndicator,
 } from 'react-native';
-import { COLORS, SHADOWS, RADIUS } from '../constants/theme';
+import { SHADOWS, RADIUS } from '../constants/theme';
 import { QueueCardData } from '../types';
 import { apiService } from '../services/api';
+import { useAppTheme } from '../context/ThemeContext';
+import { hapticFeedback } from '../utils/haptics';
 import { UserCheck, Clock, Users, XCircle, ArrowRight, Headset } from 'lucide-react-native';
 
 interface QueueCardProps {
   queue: QueueCardData;
   clientId: string;
+  /** A locally generated queue must be visibly treated as a preview. */
+  isDemo?: boolean;
   onCancelQueue?: () => void;
   onAdvanceQueue?: (updated: QueueCardData) => void;
 }
@@ -21,13 +25,42 @@ interface QueueCardProps {
 export const QueueCard: React.FC<QueueCardProps> = ({
   queue: initialQueue,
   clientId,
+  isDemo = false,
   onCancelQueue,
   onAdvanceQueue,
 }) => {
+  const { colors, isDark } = useAppTheme();
   const [queue, setQueue] = useState<QueueCardData>(initialQueue);
   const [loading, setLoading] = useState(false);
 
+  // ⚡ Sincronização em tempo real via Server-Sent Events (SSE) sem polling
+  useEffect(() => {
+    const unsubscribe = apiService.subscribeQueueStream(clientId, (data) => {
+      const entry = data.entry;
+      if (entry) {
+        setQueue((prev) => {
+          if (prev.position !== entry.position || prev.status !== entry.status) {
+            if (entry.status === 'ASSIGNED') {
+              hapticFeedback.success();
+            } else {
+              hapticFeedback.light();
+            }
+          }
+          return entry;
+        });
+        if (onAdvanceQueue) {
+          onAdvanceQueue(entry);
+        }
+      }
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, [clientId]);
+
   const handleAdvance = async () => {
+    hapticFeedback.medium();
     setLoading(true);
     try {
       const res = await apiService.advanceQueue(clientId);
@@ -43,6 +76,7 @@ export const QueueCard: React.FC<QueueCardProps> = ({
   };
 
   const handleCancel = async () => {
+    hapticFeedback.light();
     setLoading(true);
     try {
       await apiService.leaveQueue(clientId);
@@ -60,116 +94,206 @@ export const QueueCard: React.FC<QueueCardProps> = ({
 
   if (isCancelled) {
     return (
-      <View style={styles.cancelledCard}>
-        <XCircle size={18} color={COLORS.dangerDark} strokeWidth={2.2} />
-        <Text style={styles.cancelledText}>Você saiu da fila de atendimento humano.</Text>
+      <View
+        style={[
+          styles.cancelledCard,
+          {
+            backgroundColor: colors.dangerLight,
+            borderColor: colors.dangerBorder,
+          },
+        ]}
+      >
+        <XCircle size={18} color={colors.dangerDark} strokeWidth={2.2} />
+        <Text style={[styles.cancelledText, { color: colors.dangerDark }]}>
+          Você saiu da fila de atendimento humano.
+        </Text>
       </View>
     );
   }
 
   return (
-    <View style={[styles.card, isAssigned ? styles.cardAssigned : styles.cardQueued]}>
+    <View
+      style={[
+        styles.card,
+        isAssigned
+          ? [
+              styles.cardAssigned,
+              {
+                backgroundColor: colors.successLight,
+                borderColor: colors.successBorder,
+              },
+            ]
+          : [
+              styles.cardQueued,
+              {
+                backgroundColor: colors.card,
+                borderColor: colors.primaryBorder,
+              },
+            ],
+      ]}
+    >
       {/* Header com Status */}
       <View style={styles.headerRow}>
-        <View style={[styles.iconBox, isAssigned ? styles.iconBoxAssigned : styles.iconBoxQueued]}>
+        <View
+          style={[
+            styles.iconBox,
+            isAssigned
+              ? [styles.iconBoxAssigned, { backgroundColor: colors.card }]
+              : [styles.iconBoxQueued, { backgroundColor: colors.primaryLight }],
+          ]}
+        >
           {isAssigned ? (
-            <Headset size={16} color={COLORS.successDark} strokeWidth={2.5} />
+            <Headset size={16} color={colors.successDark} strokeWidth={2.5} />
           ) : (
-            <Users size={16} color={COLORS.primary} strokeWidth={2.5} />
+            <Users size={16} color={colors.primary} strokeWidth={2.5} />
           )}
         </View>
         <View style={styles.headerInfo}>
-          <Text style={[styles.headerTitle, isAssigned ? styles.titleAssigned : styles.titleQueued]}>
+          <Text
+            style={[
+              styles.headerTitle,
+              isAssigned
+                ? { color: colors.successDark }
+                : { color: isDark ? '#FFA07A' : colors.primaryDark },
+            ]}
+          >
             {isAssigned ? 'Atendente Humano Conectado' : 'Fila de Espera Virtual'}
           </Text>
-          <Text style={styles.departmentLabel}>
+          <Text style={[styles.departmentLabel, { color: colors.textMuted }]}>
             Setor: {queue.department} • Protocolo: {queue.queueId}
           </Text>
         </View>
       </View>
 
+      {isDemo && (
+        <View
+          style={[styles.demoNotice, { backgroundColor: colors.warningLight, borderColor: colors.warningBorder }]}
+          accessibilityLiveRegion="polite"
+        >
+          <Text style={[styles.demoNoticeText, { color: colors.warningDark }]}>Prévia local: nenhum atendimento foi solicitado.</Text>
+        </View>
+      )}
+
       {/* Corpo: Informações de Fila ou Atendente */}
       {!isAssigned ? (
         <View style={styles.queueBody}>
-          <View style={styles.metricsRow}>
+          <View
+            style={[
+              styles.metricsRow,
+              {
+                backgroundColor: colors.cardSubdued,
+                borderColor: colors.border,
+              },
+            ]}
+          >
             <View style={styles.metricItem}>
-              <Text style={styles.metricLabel}>Sua Posição</Text>
+              <Text style={[styles.metricLabel, { color: colors.textMuted }]}>Sua Posição</Text>
               <View style={styles.positionBadge}>
-                <Text style={styles.positionNumber}>#{queue.position}</Text>
-                <Text style={styles.positionSuffix}>lugar</Text>
+                <Text style={[styles.positionNumber, { color: colors.primary }]}>
+                  #{queue.position}
+                </Text>
+                <Text style={[styles.positionSuffix, { color: colors.textSecondary }]}>lugar</Text>
               </View>
             </View>
 
-            <View style={styles.divider} />
+            <View style={[styles.divider, { backgroundColor: colors.border }]} />
 
             <View style={styles.metricItem}>
-              <Text style={styles.metricLabel}>Tempo Estimado</Text>
+              <Text style={[styles.metricLabel, { color: colors.textMuted }]}>Tempo Estimado</Text>
               <View style={styles.timeBadge}>
-                <Clock size={14} color={COLORS.warningDark} strokeWidth={2.2} />
-                <Text style={styles.timeNumber}>~{queue.estimatedWaitMinutes} min</Text>
+                <Clock size={14} color={colors.warningDark} strokeWidth={2.2} />
+                <Text style={[styles.timeNumber, { color: colors.warningDark }]}>
+                  ~{queue.estimatedWaitMinutes} min
+                </Text>
               </View>
             </View>
           </View>
 
           <View style={styles.progressContainer}>
-            <ActivityIndicator size="small" color={COLORS.primary} />
-            <Text style={styles.progressText}>
-              Aguardando atendente disponível. Você será atendido em instantes!
+            <ActivityIndicator size="small" color={colors.primary} />
+            <Text style={[styles.progressText, { color: colors.textMuted }]}>
+              {isDemo
+                ? 'Esta é uma simulação local; a fila real só aparece após confirmação do servidor.'
+                : 'Aguardando atendente disponível. Você será atendido em instantes!'}
             </Text>
           </View>
         </View>
       ) : (
         <View style={styles.assignedBody}>
-          <View style={styles.agentCard}>
-            <UserCheck size={20} color={COLORS.successDark} strokeWidth={2.5} />
+          <View
+            style={[
+              styles.agentCard,
+              {
+                backgroundColor: colors.card,
+                borderColor: colors.successBorder,
+              },
+            ]}
+          >
+            <UserCheck size={20} color={colors.successDark} strokeWidth={2.5} />
             <View style={styles.agentInfo}>
-              <Text style={styles.agentName}>{queue.assignedAgent?.name || 'Mariana Souza'}</Text>
-              <Text style={styles.agentRole}>
+              <Text style={[styles.agentName, { color: colors.text }]}>
+                {queue.assignedAgent?.name || 'Mariana Souza'}
+              </Text>
+              <Text style={[styles.agentRole, { color: colors.textSecondary }]}>
                 {queue.assignedAgent?.role || 'Especialista em Atendimento DBS'}
               </Text>
             </View>
           </View>
-          <Text style={styles.assignedMessage}>
+          <Text style={[styles.assignedMessage, { color: colors.textSecondary }]}>
             "Olá! Sou a Mariana da equipe de atendimento da DBS Telecom. Como posso te auxiliar com sua solicitação hoje?"
           </Text>
         </View>
       )}
 
       {/* Ações */}
-      <View style={styles.actionsRow}>
+      {!isDemo && <View style={styles.actionsRow}>
         {!isAssigned ? (
           <>
             <TouchableOpacity
-              style={styles.cancelBtn}
+              style={[
+                styles.cancelBtn,
+                {
+                  backgroundColor: colors.cardSubdued,
+                  borderColor: colors.border,
+                },
+              ]}
               onPress={handleCancel}
               disabled={loading}
               activeOpacity={0.7}
+              accessibilityRole="button"
+              accessibilityLabel="Cancelar espera de atendimento"
             >
-              <Text style={styles.cancelBtnText}>Cancelar espera</Text>
+              <Text style={[styles.cancelBtnText, { color: colors.textSecondary }]}>
+                Cancelar espera
+              </Text>
             </TouchableOpacity>
 
             <TouchableOpacity
-              style={styles.advanceBtn}
+              style={[styles.advanceBtn, { backgroundColor: colors.primary }]}
               onPress={handleAdvance}
               disabled={loading}
               activeOpacity={0.8}
+              accessibilityRole="button"
+              accessibilityLabel={queue.position > 1 ? 'Simular avanço da fila' : 'Conectar atendente'}
             >
               <Text style={styles.advanceBtnText}>
                 {queue.position > 1 ? 'Simular avanço (#1)' : 'Conectar atendente'}
               </Text>
-              <ArrowRight size={13} color={COLORS.white} strokeWidth={2.5} />
+              <ArrowRight size={13} color="#FFFFFF" strokeWidth={2.5} />
             </TouchableOpacity>
           </>
         ) : (
           <TouchableOpacity
-            style={styles.connectedBtn}
+            style={[styles.connectedBtn, { backgroundColor: colors.successDark }]}
             onPress={() => {}}
             activeOpacity={0.9}
+            accessibilityRole="button"
+            accessibilityLabel="Atendimento em andamento"
           >
             <Text style={styles.connectedBtnText}>Atendimento em andamento</Text>
           </TouchableOpacity>
         )}
-      </View>
+      </View>}
     </View>
   );
 };
@@ -181,15 +305,22 @@ const styles = StyleSheet.create({
     marginTop: 8,
     ...SHADOWS.md,
   },
+  demoNotice: {
+    borderWidth: 1,
+    borderRadius: RADIUS.sm,
+    padding: 9,
+    marginTop: 10,
+  },
+  demoNoticeText: {
+    fontSize: 11,
+    lineHeight: 15,
+    fontWeight: '700',
+  },
   cardQueued: {
-    backgroundColor: COLORS.white,
     borderWidth: 1.5,
-    borderColor: COLORS.primaryBorder,
   },
   cardAssigned: {
-    backgroundColor: COLORS.successLight,
     borderWidth: 1.5,
-    borderColor: COLORS.successBorder,
   },
   headerRow: {
     flexDirection: 'row',
@@ -203,12 +334,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  iconBoxQueued: {
-    backgroundColor: COLORS.primaryLight,
-  },
-  iconBoxAssigned: {
-    backgroundColor: COLORS.white,
-  },
+  iconBoxQueued: {},
+  iconBoxAssigned: {},
   headerInfo: {
     flex: 1,
   },
@@ -216,15 +343,8 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '800',
   },
-  titleQueued: {
-    color: COLORS.primaryDark,
-  },
-  titleAssigned: {
-    color: COLORS.successDark,
-  },
   departmentLabel: {
     fontSize: 10.5,
-    color: COLORS.textMuted,
     marginTop: 1,
   },
   queueBody: {
@@ -234,12 +354,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-around',
-    backgroundColor: COLORS.backgroundAlt,
     borderRadius: RADIUS.sm,
     paddingVertical: 10,
     paddingHorizontal: 8,
     borderWidth: 1,
-    borderColor: COLORS.border,
   },
   metricItem: {
     alignItems: 'center',
@@ -247,7 +365,6 @@ const styles = StyleSheet.create({
   metricLabel: {
     fontSize: 10,
     fontWeight: '700',
-    color: COLORS.textMuted,
     marginBottom: 4,
     textTransform: 'uppercase',
   },
@@ -259,17 +376,14 @@ const styles = StyleSheet.create({
   positionNumber: {
     fontSize: 18,
     fontWeight: '900',
-    color: COLORS.primary,
   },
   positionSuffix: {
     fontSize: 11,
     fontWeight: '700',
-    color: COLORS.textSecondary,
   },
   divider: {
     width: 1,
     height: 30,
-    backgroundColor: COLORS.border,
   },
   timeBadge: {
     flexDirection: 'row',
@@ -279,7 +393,6 @@ const styles = StyleSheet.create({
   timeNumber: {
     fontSize: 14,
     fontWeight: '800',
-    color: COLORS.warningDark,
   },
   progressContainer: {
     flexDirection: 'row',
@@ -291,7 +404,6 @@ const styles = StyleSheet.create({
   progressText: {
     flex: 1,
     fontSize: 11,
-    color: COLORS.textMuted,
     lineHeight: 15,
   },
   assignedBody: {
@@ -301,11 +413,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
-    backgroundColor: COLORS.white,
     padding: 10,
     borderRadius: RADIUS.sm,
     borderWidth: 1,
-    borderColor: COLORS.successBorder,
   },
   agentInfo: {
     flex: 1,
@@ -313,16 +423,13 @@ const styles = StyleSheet.create({
   agentName: {
     fontSize: 13,
     fontWeight: '800',
-    color: COLORS.text,
   },
   agentRole: {
     fontSize: 11,
-    color: COLORS.textSecondary,
     marginTop: 1,
   },
   assignedMessage: {
     fontSize: 12,
-    color: COLORS.textSecondary,
     fontStyle: 'italic',
     marginTop: 8,
     lineHeight: 16,
@@ -337,15 +444,12 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingVertical: 7,
     borderRadius: RADIUS.full,
-    backgroundColor: COLORS.cardSubdued,
     borderWidth: 1,
-    borderColor: COLORS.border,
     alignItems: 'center',
   },
   cancelBtnText: {
     fontSize: 11.5,
     fontWeight: '700',
-    color: COLORS.textSecondary,
   },
   advanceBtn: {
     flex: 1.3,
@@ -355,40 +459,35 @@ const styles = StyleSheet.create({
     gap: 5,
     paddingVertical: 7,
     borderRadius: RADIUS.full,
-    backgroundColor: COLORS.primary,
     ...SHADOWS.primary,
   },
   advanceBtnText: {
     fontSize: 11.5,
     fontWeight: '800',
-    color: COLORS.white,
+    color: '#FFFFFF',
   },
   connectedBtn: {
     flex: 1,
     paddingVertical: 8,
     borderRadius: RADIUS.full,
-    backgroundColor: COLORS.successDark,
     alignItems: 'center',
   },
   connectedBtnText: {
     fontSize: 12,
     fontWeight: '800',
-    color: COLORS.white,
+    color: '#FFFFFF',
   },
   cancelledCard: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    backgroundColor: COLORS.dangerLight,
     borderWidth: 1,
-    borderColor: COLORS.dangerBorder,
     borderRadius: RADIUS.md,
     padding: 10,
     marginTop: 8,
   },
   cancelledText: {
     fontSize: 12,
-    color: COLORS.dangerDark,
     fontWeight: '700',
   },
 });

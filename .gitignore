@@ -9,6 +9,7 @@ build/
 .expo/
 web-build/
 *.tsbuildinfo
+backend/worker-configuration.d.ts
 
 # SQLite Database & Storage
 data/

@@ -8,16 +8,35 @@ export interface Customer {
   email: string;
   telefone: string;
   endereco: string;
+  /** True only for an explicitly selected local/demo customer. */
+  isDemo?: boolean;
+}
+
+export type SessionMode = 'live' | 'demo';
+
+/**
+ * The customer object is display data; the token is the authentication proof.
+ * A session is never valid when the token is absent.
+ */
+export interface AuthSession {
+  customer: Customer;
+  token: string;
+  expiresAt?: number;
+  mode?: SessionMode;
 }
 
 export interface AuthResponse {
   found: boolean;
   authenticated: boolean;
+  mode?: SessionMode;
+  dataState?: ApiDataState;
   token?: string;
   expiresIn?: string;
-  client: Customer;
+  client?: Customer;
   contracts?: Contract[];
 }
+
+export type ApiDataState = 'LIVE' | 'UNAVAILABLE' | 'UNAUTHORIZED' | 'DEMO';
 
 export interface Contract {
   id: string;
@@ -39,8 +58,12 @@ export interface FormattedInvoice {
   linhaDigitavel: string;
   linhaDigitavelFormatada: string;
   pixCopiaECola: string;
+  clienteId?: string;
   obs?: string;
   isOverdue: boolean;
+  /** Backend marks explicitly configured demo data; never inferred client-side. */
+  simulated?: boolean;
+  dataState?: ApiDataState;
 }
 
 export interface DBSPlan {
@@ -56,6 +79,7 @@ export interface DBSPlan {
   isPopular?: boolean;
   recommendedForDevices?: string;
   features: string[];
+  dataState?: ApiDataState;
 }
 
 export interface TicketRecord {
@@ -163,6 +187,8 @@ export interface ChatMessage {
   aiProvider?: string;
   aiModel?: string;
   guardrailApplied?: boolean;
+  /** Indicates whether this message came from the live API or an explicit non-live state. */
+  dataState?: ApiDataState;
   cards?: {
     type: 'INVOICE' | 'PLANS' | 'DIAGNOSTIC' | 'TICKET' | 'CSAT' | 'QUEUE' | 'AUDIO';
     invoices?: FormattedInvoice[];
@@ -172,4 +198,110 @@ export interface ChatMessage {
     queue?: QueueCardData;
     audio?: AudioCardData;
   };
+}
+
+// 📶 Wi-Fi & Rede Visitas
+export interface WifiSettings {
+  clientId: string;
+  ssid2G: string;
+  ssid5G: string;
+  password: string;
+  guestSsid: string;
+  guestPassword: string;
+  guestEnabled: boolean;
+  security: 'WPA2-PSK' | 'WPA3-SAE' | 'WPA2/WPA3-Mixed';
+  channel2G: number;
+  channel5G: number;
+  connectedDevices: number;
+  updatedAt: string;
+}
+
+export interface UpdateWifiSettingsDto {
+  ssid2G?: string;
+  ssid5G?: string;
+  password?: string;
+  guestSsid?: string;
+  guestPassword?: string;
+  guestEnabled?: boolean;
+}
+
+export interface WifiGuestQrPayload {
+  ssid: string;
+  password: string;
+  qrString: string;
+  security: string;
+}
+
+// 🔍 Diagnóstico Ótico (dBm)
+export type OpticalStatus = 'PERFECT' | 'WARNING' | 'CRITICAL';
+
+export interface OpticalDiagnosticResult {
+  clientId: string;
+  rxPowerDbm: number;
+  txPowerDbm: number;
+  onuStatus: 'ONLINE' | 'OFFLINE' | 'LOS';
+  oltIp: string;
+  ponPort: string;
+  classification: OpticalStatus;
+  statusLabel: string;
+  description: string;
+  recommendation: string;
+  ticketCreated: boolean;
+  ticketProtocol?: string;
+  checkedAt: string;
+}
+
+// 🔔 Notificações Inteligentes
+export type NotificationType =
+  | 'INVOICE_REMINDER'
+  | 'MAINTENANCE_ALERT'
+  | 'TICKET_STATUS'
+  | 'REFERRAL_REWARD'
+  | 'SYSTEM_NOTICE';
+
+export interface PushNotification {
+  id: string;
+  clientId: string;
+  type: NotificationType;
+  title: string;
+  body: string;
+  actionType?: 'COPY_PIX' | 'VIEW_INVOICE' | 'TICKET_DETAILS' | 'VIEW_REFERRALS' | 'GENERAL';
+  actionPayload?: string;
+  read: boolean;
+  createdAt: string;
+}
+
+// 🎁 Programa Indique e Ganhe 50% OFF
+export type ReferralStatus = 'PENDING_INSTALL' | 'ACTIVE_DISCOUNT' | 'COMPLETED';
+
+export interface ReferredFriend {
+  id: string;
+  name: string;
+  phone: string;
+  status: ReferralStatus;
+  statusLabel: string;
+  statusBadgeColor: string;
+  discountMonth?: string;
+  discountPercentage: number;
+  createdAt: string;
+}
+
+export interface ReferralSummary {
+  clientId: string;
+  referralCode: string;
+  referralLink: string;
+  totalReferred: number;
+  activeDiscounts: number;
+  totalSaved: number;
+  totalSavedFormatado: string;
+  friends: ReferredFriend[];
+}
+
+export interface PixPaymentEvent {
+  event: 'PIX_CONFIRMED';
+  invoiceId: string;
+  clientId: string;
+  amount: number;
+  paidAt: string;
+  message: string;
 }

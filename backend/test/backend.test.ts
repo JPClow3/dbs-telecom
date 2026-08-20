@@ -111,7 +111,7 @@ describe('3. Support Diagnostic State Machine', () => {
     const clientId = 'test-client-99';
 
     // Etapa 1: Início (Múltiplos aparelhos)
-    const step1 = supportService.startDiagnostic(clientId);
+    const step1 = await supportService.startDiagnostic(clientId);
     expect(step1.step).toBe('STEP_1_DEVICES');
 
     // Etapa 2: Verificação de cabos/LEDs
@@ -182,13 +182,14 @@ describe('5. User Authentication & Account Sync (Password = CPF)', () => {
 });
 
 describe('6. Desbloqueio em Confiança (Promessa de Pagamento)', () => {
-  it('deve processar o desbloqueio em confiança por 72h e retornar protocolo', async () => {
+  it('deve identificar claramente o desbloqueio simulado sem afirmar alteração no IXC', async () => {
     const res = await financialService.unblockPromise('2270', '2323');
     expect(res.success).toBe(true);
     expect(res.unblockHours).toBe(72);
     expect(res.protocolo).toContain('DBS-DESB-');
     expect(res.unblockUntil).toBeDefined();
-    expect(res.message).toContain('desbloqueado em confiança');
+    expect(res.simulated).toBe(true);
+    expect(res.message).toContain('IXC não foi alterado');
   });
 
   it('deve reconhecer pedido de desbloqueio em confiança no FastRouter e Chat', async () => {
@@ -256,4 +257,3 @@ describe('9. Extrato de Consumo de Franquia / Tráfego de Dados', () => {
     expect(firstDay.totalGB).toBeGreaterThanOrEqual(0);
   });
 });
-

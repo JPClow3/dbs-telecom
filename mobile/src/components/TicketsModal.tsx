@@ -10,7 +10,10 @@ import {
   RefreshControl,
   Platform,
 } from 'react-native';
-import { COLORS, SHADOWS, RADIUS } from '../constants/theme';
+import { SHADOWS, RADIUS } from '../constants/theme';
+import { useAppTheme } from '../context/ThemeContext';
+import { useNetworkStatus } from '../hooks/useNetworkStatus';
+import { hapticFeedback } from '../utils/haptics';
 import { TicketRecord } from '../types';
 import { apiService } from '../services/api';
 import {
@@ -43,18 +46,25 @@ export const TicketsModal: React.FC<TicketsModalProps> = ({
   onNavigateToChat,
   onShowToast,
 }) => {
+  const { colors, isDark } = useAppTheme();
+  const { isConnected, isInternetReachable } = useNetworkStatus();
+  const isNetworkOnline = isConnected && isInternetReachable !== false;
   const [tickets, setTickets] = useState<TicketRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [loadError, setLoadError] = useState(false);
   const [filter, setFilter] = useState<'ALL' | 'ACTIVE' | 'DONE'>('ALL');
   const [copiedProtocol, setCopiedProtocol] = useState<string | null>(null);
 
   const fetchTickets = async () => {
+    setLoadError(false);
     try {
       const data = await apiService.getClientTickets(clientId);
       setTickets(data);
     } catch (e) {
       console.warn('Erro ao carregar chamados:', e);
+      setTickets([]);
+      setLoadError(true);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -69,6 +79,7 @@ export const TicketsModal: React.FC<TicketsModalProps> = ({
   }, [visible, clientId]);
 
   const handleCopy = (protocol: string) => {
+    hapticFeedback.success();
     if (Platform.OS === 'web') {
       try {
         navigator.clipboard.writeText(protocol);
@@ -81,6 +92,11 @@ export const TicketsModal: React.FC<TicketsModalProps> = ({
     }
     setCopiedProtocol(protocol);
     setTimeout(() => setCopiedProtocol(null), 2500);
+  };
+
+  const handleFilterChange = (newFilter: 'ALL' | 'ACTIVE' | 'DONE') => {
+    hapticFeedback.selection();
+    setFilter(newFilter);
   };
 
   const filteredTickets = tickets.filter((t) => {
@@ -96,72 +112,131 @@ export const TicketsModal: React.FC<TicketsModalProps> = ({
 
     if (status === 'C' || status === 'F' || label === 'Concluído') {
       return (
-        <View style={[styles.statusBadge, styles.statusBadgeDone]}>
-          <CheckCircle2 size={11} color={COLORS.successDark} strokeWidth={2.5} />
-          <Text style={styles.statusTextDone}>Concluído</Text>
+        <View
+          style={[
+            styles.statusBadge,
+            {
+              backgroundColor: colors.successLight,
+              borderColor: colors.successBorder,
+            },
+          ]}
+        >
+          <CheckCircle2 size={11} color={colors.successDark} strokeWidth={2.5} />
+          <Text style={[styles.statusText, { color: colors.successDark }]}>Concluído</Text>
         </View>
       );
     }
 
     if (status === 'EC' || label.includes('Caminho')) {
       return (
-        <View style={[styles.statusBadge, styles.statusBadgeEnRoute]}>
-          <Truck size={11} color={COLORS.primaryDark} strokeWidth={2.5} />
-          <Text style={styles.statusTextEnRoute}>Técnico a Caminho</Text>
+        <View
+          style={[
+            styles.statusBadge,
+            {
+              backgroundColor: colors.primaryUltraLight,
+              borderColor: colors.primaryBorder,
+            },
+          ]}
+        >
+          <Truck size={11} color={isDark ? '#FFA07A' : colors.primaryDark} strokeWidth={2.5} />
+          <Text style={[styles.statusText, { color: isDark ? '#FFA07A' : colors.primaryDark }]}>
+            Técnico a Caminho
+          </Text>
         </View>
       );
     }
 
     if (status === 'AN' || label.includes('Análise') || label.includes('Analise')) {
       return (
-        <View style={[styles.statusBadge, styles.statusBadgeAnalysis]}>
-          <Clock size={11} color={COLORS.infoDark} strokeWidth={2.5} />
-          <Text style={styles.statusTextAnalysis}>Em Análise</Text>
+        <View
+          style={[
+            styles.statusBadge,
+            {
+              backgroundColor: colors.infoLight,
+              borderColor: colors.infoBorder,
+            },
+          ]}
+        >
+          <Clock size={11} color={colors.infoDark} strokeWidth={2.5} />
+          <Text style={[styles.statusText, { color: colors.infoDark }]}>Em Análise</Text>
         </View>
       );
     }
 
     return (
-      <View style={[styles.statusBadge, styles.statusBadgeOpen]}>
-        <AlertCircle size={11} color={COLORS.warningDark} strokeWidth={2.5} />
-        <Text style={styles.statusTextOpen}>{label}</Text>
+      <View
+        style={[
+          styles.statusBadge,
+          {
+            backgroundColor: colors.warningLight,
+            borderColor: colors.warningBorder,
+          },
+        ]}
+      >
+        <AlertCircle size={11} color={colors.warningDark} strokeWidth={2.5} />
+        <Text style={[styles.statusText, { color: colors.warningDark }]}>{label}</Text>
       </View>
     );
   };
 
   const renderTicketCard = ({ item }: { item: TicketRecord }) => {
     return (
-      <View style={styles.ticketCard}>
+      <View
+        style={[
+          styles.ticketCard,
+          {
+            backgroundColor: colors.card,
+            borderColor: colors.border,
+          },
+        ]}
+      >
         {/* Header do Card com Assunto e Status */}
-        <View style={styles.cardHeader}>
+        <View style={[styles.cardHeader, { borderBottomColor: colors.borderLight }]}>
           <View style={styles.subjectBox}>
-            <View style={styles.ticketIcon}>
-              <Wrench size={16} color={COLORS.primary} strokeWidth={2.2} />
+            <View style={[styles.ticketIcon, { backgroundColor: colors.primaryLight }]}>
+              <Wrench size={16} color={colors.primary} strokeWidth={2.2} />
             </View>
             <View style={styles.subjectContent}>
-              <Text style={styles.subjectText}>{item.assunto}</Text>
-              <Text style={styles.protocolText}>Protocolo: #{item.protocolo || item.id}</Text>
+              <Text style={[styles.subjectText, { color: colors.secondary }]}>{item.assunto}</Text>
+              <Text style={[styles.protocolText, { color: colors.textMuted }]}>
+                Protocolo: #{item.protocolo || item.id}
+              </Text>
             </View>
           </View>
           {getStatusBadge(item)}
         </View>
 
         {/* Mensagem / Descrição */}
-        <Text style={styles.descText}>{item.mensagem}</Text>
+        <Text style={[styles.descText, { color: colors.textSecondary }]}>{item.mensagem}</Text>
 
         {/* Informações do Técnico e Previsão */}
         {(item.nome_tecnico || item.previsao_visita) && (
-          <View style={styles.techInfoGrid}>
+          <View
+            style={[
+              styles.techInfoGrid,
+              {
+                backgroundColor: colors.cardSubdued,
+                borderColor: colors.border,
+              },
+            ]}
+          >
             {item.nome_tecnico && (
               <View style={styles.techItem}>
-                <User size={13} color={COLORS.textMuted} strokeWidth={2} />
-                <Text style={styles.techItemText}>Técnico: {item.nome_tecnico}</Text>
+                <User size={13} color={colors.textMuted} strokeWidth={2} />
+                <Text style={[styles.techItemText, { color: colors.text }]}>
+                  Técnico: {item.nome_tecnico}
+                </Text>
               </View>
             )}
             {item.previsao_visita && (
               <View style={styles.techItem}>
-                <Calendar size={13} color={COLORS.primaryDark} strokeWidth={2} />
-                <Text style={[styles.techItemText, { color: COLORS.primaryDark, fontWeight: '700' }]}>
+                <Calendar size={13} color={isDark ? '#FFA07A' : colors.primaryDark} strokeWidth={2} />
+                <Text
+                  style={[
+                    styles.techItemText,
+                    { color: isDark ? '#FFA07A' : colors.primaryDark, fontWeight: '700' },
+                  ]}
+                >
                   Previsão: {item.previsao_visita}
                 </Text>
               </View>
@@ -171,8 +246,10 @@ export const TicketsModal: React.FC<TicketsModalProps> = ({
 
         {/* Timeline de Etapas */}
         {item.etapas && item.etapas.length > 0 && (
-          <View style={styles.timelineSection}>
-            <Text style={styles.timelineTitle}>ETAPAS DO ATENDIMENTO</Text>
+          <View style={[styles.timelineSection, { borderTopColor: colors.borderLight }]}>
+            <Text style={[styles.timelineTitle, { color: colors.textMuted }]}>
+              ETAPAS DO ATENDIMENTO
+            </Text>
             <View style={styles.timelineList}>
               {item.etapas.map((step, idx) => {
                 const isLast = idx === item.etapas!.length - 1;
@@ -182,20 +259,35 @@ export const TicketsModal: React.FC<TicketsModalProps> = ({
                       <View
                         style={[
                           styles.timelineDot,
-                          step.concluido ? styles.timelineDotDone : styles.timelineDotPending,
+                          step.concluido
+                            ? { backgroundColor: colors.success }
+                            : {
+                                backgroundColor: colors.cardSubdued,
+                                borderColor: colors.borderDark,
+                                borderWidth: 1.5,
+                              },
                         ]}
                       >
                         {step.concluido ? (
-                          <Check size={9} color={COLORS.white} strokeWidth={3} />
+                          <Check size={9} color="#FFFFFF" strokeWidth={3} />
                         ) : (
-                          <View style={styles.innerDotPending} />
+                          <View
+                            style={[
+                              styles.innerDotPending,
+                              { backgroundColor: colors.textMuted },
+                            ]}
+                          />
                         )}
                       </View>
                       {!isLast && (
                         <View
                           style={[
                             styles.timelineLine,
-                            step.concluido ? styles.timelineLineDone : styles.timelineLinePending,
+                            {
+                              backgroundColor: step.concluido
+                                ? colors.success
+                                : colors.border,
+                            },
                           ]}
                         />
                       )}
@@ -206,16 +298,21 @@ export const TicketsModal: React.FC<TicketsModalProps> = ({
                         <Text
                           style={[
                             styles.stepTitle,
-                            step.concluido && styles.stepTitleDone,
+                            { color: colors.textMuted },
+                            step.concluido && { color: colors.secondary, fontWeight: '800' },
                           ]}
                         >
                           {step.titulo}
                         </Text>
                         {step.dataHora && (
-                          <Text style={styles.stepTimeText}>{step.dataHora}</Text>
+                          <Text style={[styles.stepTimeText, { color: colors.textSubtle }]}>
+                            {step.dataHora}
+                          </Text>
                         )}
                       </View>
-                      <Text style={styles.stepDescText}>{step.descricao}</Text>
+                      <Text style={[styles.stepDescText, { color: colors.textMuted }]}>
+                        {step.descricao}
+                      </Text>
                     </View>
                   </View>
                 );
@@ -225,35 +322,47 @@ export const TicketsModal: React.FC<TicketsModalProps> = ({
         )}
 
         {/* Botões de Ação */}
-        <View style={styles.actionsRow}>
+        <View style={[styles.actionsRow, { borderTopColor: colors.borderLight }]}>
           <TouchableOpacity
-            style={styles.copyBtn}
+            style={[
+              styles.copyBtn,
+              {
+                backgroundColor: colors.cardSubdued,
+                borderColor: colors.border,
+              },
+            ]}
             onPress={() => handleCopy(item.protocolo || item.id || '')}
+            disabled={!isNetworkOnline}
             activeOpacity={0.75}
           >
             {copiedProtocol === (item.protocolo || item.id) ? (
               <>
-                <Check size={13} color={COLORS.successDark} strokeWidth={2.5} />
-                <Text style={styles.copyBtnTextSuccess}>Copiado!</Text>
+                <Check size={13} color={colors.successDark} strokeWidth={2.5} />
+                <Text style={[styles.copyBtnTextSuccess, { color: colors.successDark }]}>
+                  Copiado!
+                </Text>
               </>
             ) : (
               <>
-                <Copy size={13} color={COLORS.textSecondary} strokeWidth={2.2} />
-                <Text style={styles.copyBtnText}>Copiar Protocolo</Text>
+                <Copy size={13} color={colors.textSecondary} strokeWidth={2.2} />
+                <Text style={[styles.copyBtnText, { color: colors.textSecondary }]}>
+                  {isNetworkOnline ? 'Copiar Protocolo' : 'Disponível após reconectar'}
+                </Text>
               </>
             )}
           </TouchableOpacity>
 
           {onNavigateToChat && (
             <TouchableOpacity
-              style={styles.chatBtn}
+              style={[styles.chatBtn, { backgroundColor: colors.primary }]}
               onPress={() => {
+                hapticFeedback.medium();
                 onClose();
                 onNavigateToChat(item.protocolo || item.id);
               }}
               activeOpacity={0.75}
             >
-              <MessageSquare size={13} color={COLORS.white} strokeWidth={2.2} />
+              <MessageSquare size={13} color="#FFFFFF" strokeWidth={2.2} />
               <Text style={styles.chatBtnText}>Falar no Chat</Text>
             </TouchableOpacity>
           )}
@@ -264,55 +373,144 @@ export const TicketsModal: React.FC<TicketsModalProps> = ({
 
   return (
     <Modal visible={visible} animationType="slide" transparent={false} onRequestClose={onClose}>
-      <View style={styles.container}>
+      <View style={[styles.container, { backgroundColor: colors.background }]}>
         {/* Header Modal */}
-        <View style={styles.header}>
+        <View
+          style={[
+            styles.header,
+            {
+              backgroundColor: colors.card,
+              borderBottomColor: colors.border,
+            },
+          ]}
+        >
           <View style={styles.headerTitleGroup}>
-            <ShieldCheck size={20} color={COLORS.primary} strokeWidth={2.2} />
-            <Text style={styles.headerTitle}>Central de Chamados (O.S.)</Text>
+            <ShieldCheck size={20} color={colors.primary} strokeWidth={2.2} />
+            <Text style={[styles.headerTitle, { color: colors.secondary }]}>
+              Central de Chamados (O.S.)
+            </Text>
           </View>
-          <TouchableOpacity style={styles.closeBtn} onPress={onClose} activeOpacity={0.7}>
-            <X size={20} color={COLORS.secondary} strokeWidth={2.5} />
+          <TouchableOpacity
+            style={[styles.closeBtn, { backgroundColor: colors.cardSubdued }]}
+            onPress={() => {
+              hapticFeedback.light();
+              onClose();
+            }}
+            activeOpacity={0.7}
+            testID="close-tickets-modal-btn"
+            accessibilityRole="button"
+          >
+            <X size={20} color={colors.secondary} strokeWidth={2.5} />
           </TouchableOpacity>
         </View>
 
         {/* Abas de Filtro */}
-        <View style={styles.filterTabs}>
+        <View
+          style={[
+            styles.filterTabs,
+            {
+              backgroundColor: colors.cardSubdued,
+              borderColor: colors.border,
+            },
+          ]}
+        >
           <TouchableOpacity
-            style={[styles.filterTab, filter === 'ALL' && styles.filterTabActive]}
-            onPress={() => setFilter('ALL')}
+            style={[
+              styles.filterTab,
+              filter === 'ALL' && [styles.filterTabActive, { backgroundColor: colors.card }],
+            ]}
+            onPress={() => handleFilterChange('ALL')}
             activeOpacity={0.7}
           >
-            <Text style={[styles.filterTabText, filter === 'ALL' && styles.filterTabTextActive]}>
+            <Text
+              style={[
+                styles.filterTabText,
+                { color: colors.textMuted },
+                filter === 'ALL' && { color: colors.primary, fontWeight: '800' },
+              ]}
+            >
               Todos ({tickets.length})
             </Text>
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.filterTab, filter === 'ACTIVE' && styles.filterTabActive]}
-            onPress={() => setFilter('ACTIVE')}
+            style={[
+              styles.filterTab,
+              filter === 'ACTIVE' && [styles.filterTabActive, { backgroundColor: colors.card }],
+            ]}
+            onPress={() => handleFilterChange('ACTIVE')}
             activeOpacity={0.7}
           >
-            <Text style={[styles.filterTabText, filter === 'ACTIVE' && styles.filterTabTextActive]}>
-              Em Andamento ({tickets.filter((t) => t.status !== 'C' && t.status !== 'F' && t.statusLabel !== 'Concluído').length})
+            <Text
+              style={[
+                styles.filterTabText,
+                { color: colors.textMuted },
+                filter === 'ACTIVE' && { color: colors.primary, fontWeight: '800' },
+              ]}
+            >
+              Em Andamento (
+              {
+                tickets.filter(
+                  (t) => t.status !== 'C' && t.status !== 'F' && t.statusLabel !== 'Concluído'
+                ).length
+              }
+              )
             </Text>
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.filterTab, filter === 'DONE' && styles.filterTabActive]}
-            onPress={() => setFilter('DONE')}
+            style={[
+              styles.filterTab,
+              filter === 'DONE' && [styles.filterTabActive, { backgroundColor: colors.card }],
+            ]}
+            onPress={() => handleFilterChange('DONE')}
             activeOpacity={0.7}
           >
-            <Text style={[styles.filterTabText, filter === 'DONE' && styles.filterTabTextActive]}>
-              Concluídos ({tickets.filter((t) => t.status === 'C' || t.status === 'F' || t.statusLabel === 'Concluído').length})
+            <Text
+              style={[
+                styles.filterTabText,
+                { color: colors.textMuted },
+                filter === 'DONE' && { color: colors.primary, fontWeight: '800' },
+              ]}
+            >
+              Concluídos (
+              {
+                tickets.filter(
+                  (t) => t.status === 'C' || t.status === 'F' || t.statusLabel === 'Concluído'
+                ).length
+              }
+              )
             </Text>
           </TouchableOpacity>
         </View>
 
+        {(loadError || !isNetworkOnline) && (
+          <View
+            style={[styles.statusNotice, { backgroundColor: colors.warningLight, borderColor: colors.warningBorder }]}
+            accessibilityLiveRegion="polite"
+          >
+            <Text style={[styles.statusNoticeText, { color: colors.warningDark }]}>
+              {loadError
+                ? 'Não foi possível consultar os chamados no servidor.'
+                : 'Você está offline. Chamados locais são apenas uma prévia.'}
+            </Text>
+            <TouchableOpacity
+              style={[styles.retryButton, { borderColor: colors.warningDark }]}
+              onPress={fetchTickets}
+              accessibilityRole="button"
+              accessibilityLabel="Tentar consultar chamados novamente"
+            >
+              <Text style={[styles.retryButtonText, { color: colors.warningDark }]}>Tentar novamente</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
         {loading ? (
           <View style={styles.loadingContainer}>
-            <ActivityIndicator size="large" color={COLORS.primary} />
-            <Text style={styles.loadingText}>Consultando Ordens de Serviço no sistema IXC...</Text>
+            <ActivityIndicator size="large" color={colors.primary} />
+            <Text style={[styles.loadingText, { color: colors.textMuted }]}>
+              Consultando Ordens de Serviço no sistema IXC...
+            </Text>
           </View>
         ) : (
           <FlatList
@@ -324,19 +522,23 @@ export const TicketsModal: React.FC<TicketsModalProps> = ({
               <RefreshControl
                 refreshing={refreshing}
                 onRefresh={() => {
+                  hapticFeedback.light();
                   setRefreshing(true);
                   fetchTickets();
                 }}
-                colors={[COLORS.primary]}
+                colors={[colors.primary]}
+                tintColor={colors.primary}
               />
             }
             ListEmptyComponent={
               <View style={styles.emptyContainer}>
-                <View style={styles.emptyIconBox}>
-                  <CheckCircle2 size={36} color={COLORS.successDark} strokeWidth={2} />
+                <View style={[styles.emptyIconBox, { backgroundColor: colors.successLight }]}>
+                  <CheckCircle2 size={36} color={colors.successDark} strokeWidth={2} />
                 </View>
-                <Text style={styles.emptyTitle}>Nenhum Chamado Encontrado</Text>
-                <Text style={styles.emptyText}>
+                <Text style={[styles.emptyTitle, { color: colors.secondary }]}>
+                  Nenhum Chamado Encontrado
+                </Text>
+                <Text style={[styles.emptyText, { color: colors.textMuted }]}>
                   Não existem Ordens de Serviço nesta categoria. Se estiver enfrentando problemas com sua conexão, inicie um teste no chat de atendimento.
                 </Text>
               </View>
@@ -351,7 +553,32 @@ export const TicketsModal: React.FC<TicketsModalProps> = ({
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: COLORS.background,
+  },
+  statusNotice: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginHorizontal: 16,
+    marginTop: 8,
+    padding: 10,
+    borderWidth: 1,
+    borderRadius: RADIUS.md,
+  },
+  statusNoticeText: {
+    flex: 1,
+    fontSize: 11,
+    lineHeight: 15,
+    fontWeight: '700',
+  },
+  retryButton: {
+    borderWidth: 1,
+    borderRadius: RADIUS.full,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+  },
+  retryButtonText: {
+    fontSize: 10.5,
+    fontWeight: '800',
   },
   header: {
     flexDirection: 'row',
@@ -359,9 +586,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: 16,
     paddingVertical: 14,
-    backgroundColor: COLORS.white,
     borderBottomWidth: 1,
-    borderBottomColor: COLORS.border,
     ...SHADOWS.sm,
   },
   headerTitleGroup: {
@@ -372,25 +597,21 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontSize: 16,
     fontWeight: '900',
-    color: COLORS.secondary,
   },
   closeBtn: {
     width: 36,
     height: 36,
     borderRadius: RADIUS.full,
-    backgroundColor: COLORS.cardSubdued,
     alignItems: 'center',
     justifyContent: 'center',
   },
   filterTabs: {
     flexDirection: 'row',
     marginHorizontal: 16,
-    backgroundColor: COLORS.cardSubdued,
     borderRadius: RADIUS.md,
     padding: 3,
     marginVertical: 10,
     borderWidth: 1,
-    borderColor: COLORS.border,
   },
   filterTab: {
     flex: 1,
@@ -399,29 +620,21 @@ const styles = StyleSheet.create({
     borderRadius: RADIUS.sm,
   },
   filterTabActive: {
-    backgroundColor: COLORS.white,
     ...SHADOWS.sm,
   },
   filterTabText: {
     fontSize: 12,
     fontWeight: '600',
-    color: COLORS.textMuted,
-  },
-  filterTabTextActive: {
-    color: COLORS.primary,
-    fontWeight: '800',
   },
   listContent: {
     paddingHorizontal: 16,
     paddingBottom: 30,
   },
   ticketCard: {
-    backgroundColor: COLORS.white,
     borderRadius: RADIUS.lg,
     padding: 16,
     marginVertical: 6,
     borderWidth: 1,
-    borderColor: COLORS.border,
     ...SHADOWS.md,
   },
   cardHeader: {
@@ -430,7 +643,6 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingBottom: 10,
     borderBottomWidth: 1,
-    borderBottomColor: COLORS.borderLight,
     gap: 8,
   },
   subjectBox: {
@@ -443,7 +655,6 @@ const styles = StyleSheet.create({
     width: 34,
     height: 34,
     borderRadius: RADIUS.sm,
-    backgroundColor: COLORS.primaryLight,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -453,11 +664,9 @@ const styles = StyleSheet.create({
   subjectText: {
     fontSize: 13.5,
     fontWeight: '800',
-    color: COLORS.secondary,
   },
   protocolText: {
     fontSize: 11,
-    color: COLORS.textMuted,
     marginTop: 1,
     fontFamily: 'monospace',
   },
@@ -470,56 +679,21 @@ const styles = StyleSheet.create({
     borderRadius: RADIUS.full,
     borderWidth: 1,
   },
-  statusBadgeDone: {
-    backgroundColor: COLORS.successLight,
-    borderColor: COLORS.successBorder,
-  },
-  statusBadgeEnRoute: {
-    backgroundColor: COLORS.primaryUltraLight,
-    borderColor: COLORS.primaryBorder,
-  },
-  statusBadgeAnalysis: {
-    backgroundColor: COLORS.infoLight,
-    borderColor: COLORS.infoBorder,
-  },
-  statusBadgeOpen: {
-    backgroundColor: COLORS.warningLight,
-    borderColor: COLORS.warningBorder,
-  },
-  statusTextDone: {
+  statusText: {
     fontSize: 10,
     fontWeight: '800',
-    color: COLORS.successDark,
-  },
-  statusTextEnRoute: {
-    fontSize: 10,
-    fontWeight: '800',
-    color: COLORS.primaryDark,
-  },
-  statusTextAnalysis: {
-    fontSize: 10,
-    fontWeight: '800',
-    color: COLORS.infoDark,
-  },
-  statusTextOpen: {
-    fontSize: 10,
-    fontWeight: '800',
-    color: COLORS.warningDark,
   },
   descText: {
     fontSize: 12,
-    color: COLORS.textSecondary,
     marginTop: 10,
     lineHeight: 17,
   },
   techInfoGrid: {
-    backgroundColor: COLORS.cardSubdued,
     padding: 10,
     borderRadius: RADIUS.sm,
     marginTop: 10,
     gap: 6,
     borderWidth: 1,
-    borderColor: COLORS.border,
   },
   techItem: {
     flexDirection: 'row',
@@ -528,19 +702,16 @@ const styles = StyleSheet.create({
   },
   techItemText: {
     fontSize: 11.5,
-    color: COLORS.text,
     fontWeight: '500',
   },
   timelineSection: {
     marginTop: 12,
     paddingTop: 10,
     borderTopWidth: 1,
-    borderTopColor: COLORS.borderLight,
   },
   timelineTitle: {
     fontSize: 9.5,
     fontWeight: '800',
-    color: COLORS.textMuted,
     letterSpacing: 0.5,
     marginBottom: 8,
   },
@@ -563,30 +734,15 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     zIndex: 2,
   },
-  timelineDotDone: {
-    backgroundColor: COLORS.success,
-  },
-  timelineDotPending: {
-    backgroundColor: COLORS.cardSubdued,
-    borderWidth: 1.5,
-    borderColor: COLORS.borderDark,
-  },
   innerDotPending: {
     width: 4,
     height: 4,
     borderRadius: RADIUS.full,
-    backgroundColor: COLORS.textMuted,
   },
   timelineLine: {
     width: 2,
     flex: 1,
     marginVertical: 2,
-  },
-  timelineLineDone: {
-    backgroundColor: COLORS.success,
-  },
-  timelineLinePending: {
-    backgroundColor: COLORS.border,
   },
   timelineContentCol: {
     flex: 1,
@@ -601,19 +757,12 @@ const styles = StyleSheet.create({
   stepTitle: {
     fontSize: 11.5,
     fontWeight: '700',
-    color: COLORS.textMuted,
-  },
-  stepTitleDone: {
-    color: COLORS.secondary,
-    fontWeight: '800',
   },
   stepTimeText: {
     fontSize: 10,
-    color: COLORS.textSubtle,
   },
   stepDescText: {
     fontSize: 10.5,
-    color: COLORS.textMuted,
     marginTop: 1,
   },
   actionsRow: {
@@ -622,7 +771,6 @@ const styles = StyleSheet.create({
     marginTop: 12,
     paddingTop: 10,
     borderTopWidth: 1,
-    borderTopColor: COLORS.borderLight,
   },
   copyBtn: {
     flex: 1,
@@ -630,21 +778,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
-    backgroundColor: COLORS.cardSubdued,
     borderWidth: 1,
-    borderColor: COLORS.border,
     paddingVertical: 9,
     borderRadius: RADIUS.sm,
   },
   copyBtnText: {
     fontSize: 11.5,
     fontWeight: '700',
-    color: COLORS.textSecondary,
   },
   copyBtnTextSuccess: {
     fontSize: 11.5,
     fontWeight: '700',
-    color: COLORS.successDark,
   },
   chatBtn: {
     flex: 1,
@@ -652,14 +796,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
-    backgroundColor: COLORS.primary,
     paddingVertical: 9,
     borderRadius: RADIUS.sm,
   },
   chatBtnText: {
     fontSize: 11.5,
     fontWeight: '800',
-    color: COLORS.white,
+    color: '#FFFFFF',
   },
   loadingContainer: {
     flex: 1,
@@ -670,7 +813,6 @@ const styles = StyleSheet.create({
   loadingText: {
     marginTop: 12,
     fontSize: 13,
-    color: COLORS.textMuted,
   },
   emptyContainer: {
     alignItems: 'center',
@@ -682,7 +824,6 @@ const styles = StyleSheet.create({
     width: 60,
     height: 60,
     borderRadius: RADIUS.full,
-    backgroundColor: COLORS.successLight,
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 12,
@@ -690,11 +831,9 @@ const styles = StyleSheet.create({
   emptyTitle: {
     fontSize: 17,
     fontWeight: '800',
-    color: COLORS.secondary,
   },
   emptyText: {
     fontSize: 13,
-    color: COLORS.textMuted,
     textAlign: 'center',
     marginTop: 6,
     lineHeight: 18,

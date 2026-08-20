@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -13,11 +13,12 @@ import {
   Linking,
 } from 'react-native';
 import { SHADOWS, RADIUS } from '../constants/theme';
-import { apiService } from '../services/api';
+import { apiService, setAuthToken, startDemoMode } from '../services/api';
 import { storageService } from '../services/storage';
+import { biometricsService, BiometricCapability } from '../services/biometrics';
 import { useAppTheme } from '../context/ThemeContext';
 import { hapticFeedback } from '../utils/haptics';
-import { Customer } from '../types';
+import { AuthSession, Customer } from '../types';
 import {
   ShieldCheck,
   ArrowRight,
@@ -29,11 +30,20 @@ import {
   Sparkles,
   MessageCircle,
   X,
+  Fingerprint,
+  ScanFace,
 } from 'lucide-react-native';
 
 interface LoginScreenProps {
   onLoginSuccess: (customer: Customer) => void;
 }
+
+// A demo shortcut is intentionally unavailable in production builds. It only
+// fills development test credentials; it never bypasses the live login token.
+const DEMO_SHORTCUT_ENABLED =
+  typeof __DEV__ !== 'undefined' &&
+  __DEV__ === true &&
+  (process.env as Record<string, string | undefined>)?.EXPO_PUBLIC_DEMO_MODE === 'true';
 
 export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
   const { colors, isDark } = useAppTheme();
@@ -43,15 +53,34 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
+  const [biometricCap, setBiometricCap] = useState<BiometricCapability | null>(null);
+  const [savedBioSession, setSavedBioSession] = useState<AuthSession | null>(null);
+
+  // 🔐 Verifica capacidade biométrica ao carregar a tela
+  useEffect(() => {
+    const initBiometrics = async () => {
+      const cap = await biometricsService.checkCapabilities();
+      setBiometricCap(cap);
+      if (cap.available) {
+        const session = await biometricsService.getBiometricSession();
+        setSavedBioSession(session);
+      }
+    };
+    initBiometrics();
+  }, []);
 
   const handleTextChange = (text: string) => {
     setErrorMessage('');
     const clean = text.replace(/\D/g, '');
     if (clean.length <= 11) {
       let formatted = clean;
-      if (clean.length > 3) formatted = clean.slice(0, 3) + '.' + clean.slice(3);
-      if (clean.length > 6) formatted = formatted.slice(0, 7) + '.' + clean.slice(7);
-      if (clean.length > 9) formatted = formatted.slice(0, 11) + '-' + clean.slice(11);
+      if (clean.length > 9) {
+        formatted = `${clean.slice(0, 3)}.${clean.slice(3, 6)}.${clean.slice(6, 9)}-${clean.slice(9, 11)}`;
+      } else if (clean.length > 6) {
+        formatted = `${clean.slice(0, 3)}.${clean.slice(3, 6)}.${clean.slice(6)}`;
+      } else if (clean.length > 3) {
+        formatted = `${clean.slice(0, 3)}.${clean.slice(3)}`;
+      }
       setCpfCnpj(formatted);
       if (!passwordManuallyEdited) {
         setPassword(clean);
@@ -85,14 +114,27 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
 
     try {
       const res = await apiService.loginClient(doc, pass);
-      if (res.found && res.client) {
+      if (res.found && res.authenticated && res.token && res.client) {
         hapticFeedback.success();
-        // 💾 Persistência da Sessão no AsyncStorage
-        await storageService.saveAuthCustomer(res.client);
+        // The customer is not an authentication proof; persist the signed token
+        // and customer atomically before entering the authenticated tree.
+        await storageService.saveAuthSession({
+          customer: res.client,
+          token: res.token,
+          mode: res.mode === 'demo' || res.client.isDemo ? 'demo' : 'live',
+        });
+        // Habilita biometria por padrão se disponível
+        if (biometricCap?.available) {
+          await biometricsService.enableForCustomer();
+        }
         onLoginSuccess(res.client);
       } else {
         hapticFeedback.error();
-        setErrorMessage('Cliente não localizado na base da DBS Telecom. Verifique o CPF digitado.');
+        setErrorMessage(
+          res.found
+            ? 'O servidor não retornou uma sessão válida. Digite suas credenciais novamente.'
+            : 'Credenciais inválidas ou cliente não localizado. Verifique o CPF e a senha.'
+        );
       }
     } catch (e: any) {
       hapticFeedback.error();
@@ -102,13 +144,55 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
     }
   };
 
+  // 🔐 Autenticação Biométrica Rápida
+  const handleBiometricLogin = async () => {
+    hapticFeedback.medium();
+    if (!savedBioSession) {
+      setErrorMessage('A sessão biométrica expirou. Digite seu CPF e senha para entrar novamente.');
+      return;
+    }
+
+    const result = await biometricsService.authenticate(
+      savedBioSession
+        ? `Olá, ${savedBioSession.customer.nome}! Confirme sua identidade para entrar`
+        : 'Confirme sua biometria para acessar a DBS Telecom'
+    );
+
+    if (result.success) {
+      hapticFeedback.success();
+      const session = await biometricsService.getBiometricSession();
+      if (!session) {
+        await storageService.clearAuthSession();
+        await biometricsService.disable();
+        setSavedBioSession(null);
+        setErrorMessage('A sessão biométrica expirou. Digite seu CPF e senha para entrar novamente.');
+        return;
+      }
+
+      // Biometric re-auth may restore a complete token-backed session only. It
+      // must never turn an identity-only record into an authenticated session.
+      setAuthToken(session.token);
+      onLoginSuccess(session.customer);
+    } else if (result.error) {
+      hapticFeedback.warning();
+      setErrorMessage('Biometria não validada. Digite seu CPF e senha para entrar.');
+    }
+  };
+
   const handleQuickDemoLogin = () => {
+    if (!DEMO_SHORTCUT_ENABLED) return;
     hapticFeedback.light();
     const demoDoc = '154.293.707-89';
     const demoPass = '15429370789';
     setCpfCnpj(demoDoc);
     setPassword(demoPass);
-    handleLogin(demoDoc, demoPass);
+    try {
+      const demoCustomer = startDemoMode();
+      setErrorMessage('Modo DEMO local ativo. Dados e ações nesta sessão são simulados.');
+      onLoginSuccess(demoCustomer);
+    } catch (e: any) {
+      setErrorMessage(e?.message || 'A demonstração local está desabilitada.');
+    }
   };
 
   const handleWhatsAppContact = () => {
@@ -275,6 +359,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
             onPress={() => handleLogin()}
             disabled={loading}
             activeOpacity={0.85}
+            testID="login-btn"
+            accessibilityRole="button"
           >
             {loading ? (
               <ActivityIndicator color="#FFFFFF" />
@@ -286,25 +372,55 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
             )}
           </TouchableOpacity>
 
-          {/* Atalho Discreto para Testes / Demonstração */}
-          <TouchableOpacity
-            style={[
-              styles.demoHelper,
-              {
-                backgroundColor: colors.primaryUltraLight,
-                borderColor: colors.primaryBorder,
-              },
-            ]}
-            onPress={handleQuickDemoLogin}
-            activeOpacity={0.7}
-          >
-            <Sparkles size={13} color={colors.primary} strokeWidth={2.2} />
-            <Text style={[styles.demoHelperText, { color: colors.textSecondary }]}>
-              Preencher com conta de teste <Text style={[styles.demoHelperBold, { color: isDark ? '#FFA07A' : colors.primaryDark }]}>
-                (Emanuel da Silva)
+          {/* 🔐 Botão de Login com Biometria (FaceID / Fingerprint) */}
+          {biometricCap?.available && savedBioSession && (
+            <TouchableOpacity
+              style={[
+                styles.biometricBtn,
+                {
+                  backgroundColor: colors.cardSubdued,
+                  borderColor: colors.border,
+                },
+              ]}
+              onPress={handleBiometricLogin}
+              activeOpacity={0.8}
+              testID="biometric-login-btn"
+              accessibilityRole="button"
+            >
+              {biometricCap?.biometryType === 'FACIAL_RECOGNITION' ? (
+                <ScanFace size={20} color={colors.primary} strokeWidth={2.2} />
+              ) : (
+                <Fingerprint size={20} color={colors.primary} strokeWidth={2.2} />
+              )}
+              <Text style={[styles.biometricBtnText, { color: colors.text }]}>
+                {`Entrar como ${savedBioSession.customer.nome.split(' ')[0]} (${biometricCap.label || 'Biometria'})`}
               </Text>
-            </Text>
-          </TouchableOpacity>
+            </TouchableOpacity>
+          )}
+
+          {/* Atalho Discreto para Testes / Demonstração */}
+          {DEMO_SHORTCUT_ENABLED && (
+            <TouchableOpacity
+              style={[
+                styles.demoHelper,
+                {
+                  backgroundColor: colors.primaryUltraLight,
+                  borderColor: colors.primaryBorder,
+                },
+              ]}
+              onPress={handleQuickDemoLogin}
+              activeOpacity={0.7}
+              testID="demo-login-btn"
+              accessibilityRole="button"
+            >
+              <Sparkles size={13} color={colors.primary} strokeWidth={2.2} />
+              <Text style={[styles.demoHelperText, { color: colors.textSecondary }]}>{''}
+                Demonstração local (não é uma autenticação) <Text style={[styles.demoHelperBold, { color: isDark ? '#FFA07A' : colors.primaryDark }]}>{''}
+                  • preencher dados de teste
+                </Text>
+              </Text>
+            </TouchableOpacity>
+          )}
         </View>
 
         {/* Rodapé com Suporte e Segurança */}
@@ -463,6 +579,20 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 15,
     fontWeight: '800',
+  },
+  biometricBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    paddingVertical: 13,
+    borderRadius: RADIUS.md,
+    marginTop: 10,
+    borderWidth: 1.5,
+  },
+  biometricBtnText: {
+    fontSize: 14,
+    fontWeight: '700',
   },
   demoHelper: {
     flexDirection: 'row',

@@ -6,27 +6,48 @@
     "start": "expo start",
     "android": "expo start --android",
     "ios": "expo start --ios",
-    "web": "expo start --web"
+    "web": "expo start --web",
+    "test": "tsx --test test/**/*.test.ts",
+    "typecheck": "node --stack-size=16384 ./node_modules/typescript/bin/tsc --noEmit"
   },
   "dependencies": {
-    "@expo/metro-runtime": "~3.2.3",
-    "@react-native-async-storage/async-storage": "1.23.1",
-    "@react-native-community/netinfo": "11.3.1",
-    "expo": "~51.0.0",
-    "expo-haptics": "~13.0.1",
-    "expo-status-bar": "~1.12.1",
+    "@expo/metro-runtime": "~57.0.12",
+    "@react-native-async-storage/async-storage": "2.2.0",
+    "@react-native-community/netinfo": "12.0.1",
+    "@react-navigation/bottom-tabs": "6.6.1",
+    "@react-navigation/native": "6.1.18",
+    "@react-navigation/native-stack": "6.11.0",
+    "expo": "~57.0.15",
+    "expo-asset": "~57.0.13",
+    "expo-audio": "~57.0.4",
+    "expo-file-system": "~57.0.5",
+    "expo-haptics": "~57.0.1",
+    "expo-intent-launcher": "~57.0.1",
+    "expo-local-authentication": "~57.0.2",
+    "expo-secure-store": "~57.0.1",
+    "expo-sharing": "~57.0.14",
+    "expo-splash-screen": "~57.0.7",
+    "expo-status-bar": "~57.0.1",
     "lucide-react-native": "^1.33.0",
-    "react": "18.2.0",
-    "react-dom": "18.2.0",
-    "react-native": "0.74.5",
-    "react-native-safe-area-context": "4.10.5",
-    "react-native-svg": "15.2.0",
-    "react-native-web": "~0.19.10"
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "react-native": "0.86.2",
+    "react-native-safe-area-context": "~5.7.0",
+    "react-native-screens": "~4.26.0",
+    "react-native-svg": "15.15.4",
+    "react-native-web": "^0.21.2"
   },
   "devDependencies": {
     "@babel/core": "^7.20.0",
-    "@types/react": "~18.2.45",
-    "typescript": "~5.3.3"
+    "@types/node": "^26.2.0",
+    "@types/react": "~19.2.4",
+    "tsx": "^4.16.2",
+    "typescript": "~6.0.3"
+  },
+  "overrides": {
+    "tar": "7.5.22",
+    "@xmldom/xmldom": "0.8.14",
+    "uuid": "11.1.1"
   },
   "private": true
 }

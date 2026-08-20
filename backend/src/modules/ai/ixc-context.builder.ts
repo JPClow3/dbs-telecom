@@ -115,7 +115,7 @@ export class IXCContextBuilder {
         }
 
         // 4. Estado de suporte ativo
-        const diagState = supportService.getState(clientId);
+        const diagState = await supportService.getState(clientId);
         if (diagState && diagState.step !== 'RESOLVED') {
           supportData = {
             inDiagnostic: true,

@@ -5,7 +5,7 @@ import { CheckCircle2, AlertCircle, Info, X } from 'lucide-react-native';
 import { useAppTheme } from '../context/ThemeContext';
 import { hapticFeedback } from '../utils/haptics';
 
-export type ToastType = 'SUCCESS' | 'ERROR' | 'INFO';
+export type ToastType = 'SUCCESS' | 'ERROR' | 'INFO' | 'WARNING';
 
 interface ToastProps {
   message: string;
@@ -27,7 +27,7 @@ export const Toast: React.FC<ToastProps> = ({
   useEffect(() => {
     if (type === 'ERROR') {
       hapticFeedback.error();
-    } else if (type === 'INFO') {
+    } else if (type === 'INFO' || type === 'WARNING') {
       hapticFeedback.light();
     } else {
       hapticFeedback.success();
@@ -77,6 +77,8 @@ export const Toast: React.FC<ToastProps> = ({
     switch (type) {
       case 'ERROR':
         return <AlertCircle size={16} color="#FFFFFF" strokeWidth={2.5} />;
+      case 'WARNING':
+        return <AlertCircle size={16} color="#FFFFFF" strokeWidth={2.5} />;
       case 'INFO':
         return <Info size={16} color="#FFFFFF" strokeWidth={2.5} />;
       default:
@@ -88,6 +90,8 @@ export const Toast: React.FC<ToastProps> = ({
     switch (type) {
       case 'ERROR':
         return colors.dangerDark;
+      case 'WARNING':
+        return isDark ? '#D97706' : '#B45309';
       case 'INFO':
         return colors.infoDark;
       default:

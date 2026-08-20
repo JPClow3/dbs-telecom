@@ -1,5 +1,6 @@
 import { ixcService } from '../ixc/ixc.service.js';
 import { IXCTicketRecord } from '../ixc/ixc.types.js';
+import { supportRepository } from './support.repository.js';
 
 export type DiagnosticStep = 'IDLE' | 'STEP_1_DEVICES' | 'STEP_2_CABLES' | 'STEP_3_RESTART' | 'ESCALATED' | 'RESOLVED';
 
@@ -15,39 +16,22 @@ export interface DiagnosticState {
 }
 
 export class SupportService {
-  private activeDiagnostics: Map<string, DiagnosticState> = new Map();
-  private userTicketsMap: Map<string, IXCTicketRecord[]> = new Map();
-
-  private cleanupOldStates(): void {
-    const ONE_HOUR = 60 * 60 * 1000;
-    const now = Date.now();
-    for (const [key, state] of this.activeDiagnostics.entries()) {
-      if (state.updatedAt && now - state.updatedAt > ONE_HOUR) {
-        this.activeDiagnostics.delete(key);
-      }
-    }
-  }
-
-  private saveState(clientId: string, state: DiagnosticState): void {
+  private async saveState(clientId: string, state: DiagnosticState): Promise<void> {
     state.updatedAt = Date.now();
-    this.cleanupOldStates();
-    if (this.activeDiagnostics.size >= 500) {
-      const oldestKey = this.activeDiagnostics.keys().next().value;
-      if (oldestKey) this.activeDiagnostics.delete(oldestKey);
-    }
-    this.activeDiagnostics.set(clientId, state);
+    state.clientId = clientId;
+    await supportRepository.saveDiagnosticState(state);
   }
 
   /**
    * Inicia o fluxo de diagnóstico guiado de suporte
    */
-  startDiagnostic(clientId: string): { message: string; step: DiagnosticStep; options: string[] } {
+  async startDiagnostic(clientId: string): Promise<{ message: string; step: DiagnosticStep; options: string[] }> {
     const state: DiagnosticState = {
       clientId,
       step: 'STEP_1_DEVICES',
       updatedAt: Date.now(),
     };
-    this.saveState(clientId, state);
+    await this.saveState(clientId, state);
 
     return {
       step: 'STEP_1_DEVICES',
@@ -57,7 +41,7 @@ export class SupportService {
   }
 
   /**
-   * Avança a máquina de estados do diagnóstico
+   * Avança a máquina de estados do diagnóstico persistida em SQLite
    */
   async processDiagnosticStep(clientId: string, userResponse: string): Promise<{
     message: string;
@@ -66,9 +50,9 @@ export class SupportService {
     actionRequired?: string;
     protocolo?: string;
   }> {
-    let state = this.activeDiagnostics.get(clientId);
+    let state = await supportRepository.getDiagnosticState(clientId);
     if (!state) {
-      return this.startDiagnostic(clientId);
+      return await this.startDiagnostic(clientId);
     }
 
     const lower = userResponse.toLowerCase();
@@ -78,7 +62,7 @@ export class SupportService {
       const isMultiple = lower.includes('todos') || lower.includes('sim') || lower.includes('vários') || lower.includes('varios');
       state.multipleDevices = isMultiple;
       state.step = 'STEP_2_CABLES';
-      this.saveState(clientId, state);
+      await this.saveState(clientId, state);
 
       return {
         step: 'STEP_2_CABLES',
@@ -91,7 +75,7 @@ export class SupportService {
     if (state.step === 'STEP_2_CABLES') {
       state.cablesChecked = true;
       state.step = 'STEP_3_RESTART';
-      this.saveState(clientId, state);
+      await this.saveState(clientId, state);
 
       return {
         step: 'STEP_3_RESTART',
@@ -106,7 +90,7 @@ export class SupportService {
 
       if (isResolved) {
         state.step = 'RESOLVED';
-        this.activeDiagnostics.delete(clientId);
+        await supportRepository.deleteDiagnosticState(clientId);
         return {
           step: 'RESOLVED',
           message: '🎉 **Conexão Restabelecida com Sucesso!**\n\nQue excelente notícia! Sua conexão foi restabelecida pelo pré-atendimento inteligente da DBS Telecom.\n\nSe precisar de mais alguma coisa, estamos sempre à sua disposição!',
@@ -124,7 +108,7 @@ export class SupportService {
 
         state.protocolo = ticketRes.protocolo;
         state.ticketId = ticketRes.id;
-        this.saveState(clientId, state);
+        await this.saveState(clientId, state);
 
         const nowFormatted = new Date().toLocaleDateString('pt-BR', {
           day: '2-digit',
@@ -133,7 +117,7 @@ export class SupportService {
           minute: '2-digit',
         });
 
-        // Registra o chamado na memória do cliente com timeline
+        // Registra o chamado no SQLite com timeline persistida
         const newTicket: IXCTicketRecord = {
           id: ticketRes.id || `TKT-${Date.now().toString().slice(-6)}`,
           id_cliente: clientId,
@@ -156,8 +140,7 @@ export class SupportService {
           ],
         };
 
-        const existing = this.userTicketsMap.get(clientId) || [];
-        this.userTicketsMap.set(clientId, [newTicket, ...existing]);
+        await supportRepository.saveUserTicket(newTicket);
 
         return {
           step: 'ESCALATED',
@@ -169,7 +152,7 @@ export class SupportService {
     }
 
     // Default se estado desconhecido
-    return this.startDiagnostic(clientId);
+    return await this.startDiagnostic(clientId);
   }
 
   /**
@@ -177,7 +160,7 @@ export class SupportService {
    */
   async getClientTickets(clientId: string): Promise<IXCTicketRecord[]> {
     const fromIXC = await ixcService.getClientTickets(clientId);
-    const sessionTickets = this.userTicketsMap.get(clientId) || [];
+    const sessionTickets = await supportRepository.getUserTickets(clientId);
 
     // Mescla sem duplicidade de ID ou Protocolo
     const ticketMap = new Map<string, IXCTicketRecord>();
@@ -257,19 +240,18 @@ export class SupportService {
   }
 
   /**
-   * Obtém o estado de diagnóstico atual
+   * Obtém o estado de diagnóstico atual do SQLite
    */
-  getState(clientId: string): DiagnosticState | undefined {
-    return this.activeDiagnostics.get(clientId);
+  async getState(clientId: string): Promise<DiagnosticState | undefined> {
+    return await supportRepository.getDiagnosticState(clientId);
   }
 
   /**
    * Reseta o diagnóstico
    */
-  reset(clientId: string): void {
-    this.activeDiagnostics.delete(clientId);
+  async reset(clientId: string): Promise<void> {
+    await supportRepository.deleteDiagnosticState(clientId);
   }
 }
 
 export const supportService = new SupportService();
-

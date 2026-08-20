@@ -1,74 +1,88 @@
-import Database, { Database as DatabaseType } from 'better-sqlite3';
-import fs from 'fs';
-import path from 'path';
+import { neon, type NeonQueryFunction } from '@neondatabase/serverless';
 import { CONFIG } from '../config/env.js';
 
-let dbInstance: DatabaseType | null = null;
+type SqlParameters = unknown[];
 
-export function getDatabase(): DatabaseType {
-  if (dbInstance) {
-    return dbInstance;
+export interface SqlStatement {
+  text: string;
+  parameters?: SqlParameters;
+}
+
+export interface RunResult {
+  changes: number;
+}
+
+/**
+ * Lightweight compatibility layer around Neon HTTP queries.
+ *
+ * The application intentionally keeps SQL in its repositories. This layer
+ * centralises the serverless connection, parameter handling and the small
+ * better-sqlite3-like surface the repositories need, while keeping all I/O
+ * asynchronous for Cloudflare Workers.
+ */
+export class NeonDatabase {
+  constructor(private readonly sql: NeonQueryFunction<false, false>) {}
+
+  prepare(query: string): NeonStatement {
+    return new NeonStatement(this.sql, query);
   }
 
-  const dbPath = CONFIG.database.path;
+  async transaction(statements: SqlStatement[]): Promise<void> {
+    if (statements.length === 0) return;
 
-  // Garante que o diretório pai existe
-  if (dbPath !== ':memory:') {
-    const dir = path.dirname(dbPath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
+    await this.sql.transaction((transaction) =>
+      statements.map((statement) =>
+        transaction.query(normalizePlaceholders(statement.text), statement.parameters || [])
+      )
+    );
+  }
+}
+
+export class NeonStatement {
+  constructor(
+    private readonly sql: NeonQueryFunction<false, false>,
+    private readonly text: string
+  ) {}
+
+  async all<T extends Record<string, unknown> = Record<string, unknown>>(...parameters: SqlParameters): Promise<T[]> {
+    return (await this.sql.query(normalizePlaceholders(this.text), parameters)) as T[];
   }
 
-  dbInstance = new Database(dbPath);
+  async get<T extends Record<string, unknown> = Record<string, unknown>>(...parameters: SqlParameters): Promise<T | undefined> {
+    const rows = await this.all<T>(...parameters);
+    return rows[0];
+  }
 
-  // Performance e Concorrência
-  dbInstance.pragma('journal_mode = WAL');
-  dbInstance.pragma('foreign_keys = ON');
+  async run(...parameters: SqlParameters): Promise<RunResult> {
+    const result = await this.sql.query(normalizePlaceholders(this.text), parameters, { fullResults: true });
+    return { changes: Number(result.rowCount || 0) };
+  }
+}
 
-  // Inicializa as tabelas de persistência
-  initSchema(dbInstance);
+let dbInstance: NeonDatabase | null = null;
 
+export function getDatabase(): NeonDatabase {
+  if (dbInstance) return dbInstance;
+
+  if (!CONFIG.database.url) {
+    throw new Error('DATABASE_URL é obrigatória para a persistência PostgreSQL/Neon.');
+  }
+
+  dbInstance = new NeonDatabase(neon(CONFIG.database.url));
   return dbInstance;
 }
 
-function initSchema(db: DatabaseType) {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS chat_sessions (
-      session_id TEXT PRIMARY KEY,
-      client_id TEXT,
-      client_name TEXT,
-      current_department TEXT NOT NULL DEFAULT 'GERAL',
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS chat_messages (
-      id TEXT PRIMARY KEY,
-      session_id TEXT NOT NULL,
-      sender TEXT NOT NULL,
-      text TEXT NOT NULL,
-      timestamp TEXT NOT NULL,
-      department TEXT,
-      quick_options TEXT,
-      ai_provider TEXT,
-      ai_model TEXT,
-      guardrail_applied INTEGER DEFAULT 0,
-      cards TEXT,
-      FOREIGN KEY (session_id) REFERENCES chat_sessions(session_id) ON DELETE CASCADE
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_chat_messages_session_time 
-      ON chat_messages (session_id, timestamp);
-
-    CREATE INDEX IF NOT EXISTS idx_chat_sessions_client 
-      ON chat_sessions (client_id);
-  `);
+/** HTTP driver has no open socket to close; retained for test compatibility. */
+export async function closeDatabase(): Promise<void> {
+  dbInstance = null;
 }
 
-export function closeDatabase(): void {
-  if (dbInstance) {
-    dbInstance.close();
-    dbInstance = null;
-  }
+/**
+ * Existing repository SQL uses SQLite-style `?` parameters. Translating them
+ * at the database boundary keeps the queries parameterised while targeting
+ * PostgreSQL's `$1`, `$2`, ... syntax.
+ */
+function normalizePlaceholders(query: string): string {
+  let index = 0;
+  return query.replace(/\?/g, () => `$${++index}`);
 }

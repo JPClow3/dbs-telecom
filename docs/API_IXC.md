@@ -1,5 +1,7 @@
 # 🔌 Documentação de Integração — API IXC Soft & Backend BFF
 
+> Os exemplos de resposta são ilustrativos. Só trate dados financeiros, contratos, desbloqueios e protocolos como efetivos quando a resposta autenticada do provedor confirmar a operação. Falhas, timeouts e modo demo devem permanecer visíveis para o cliente.
+
 Este documento é a referência técnica completa para a integração entre o **Backend BFF da DBS Telecom** e o **WebService v1 do IXC Soft ERP**, além de documentar todos os endpoints REST expostos pelo BFF para o aplicativo mobile e aplicações clientes.
 
 ---
@@ -35,7 +37,7 @@ O backend da DBS Telecom disponibiliza uma interface interativa completa no padr
 
 ### 1.1 Configurações de Conexão e Autenticação
 * **URL Base do ERP:** `https://demo.ixcsoft.com.br/webservice/v1`
-* **Token de Integração:** `replace-with-a-rotated-ixc-token`
+* **Token de Integração:** `[CONFIGURADO_FORA_DO_REPOSITÓRIO]` — nunca documente ou comite o valor real; use a variável de ambiente no backend.
 * **Mecanismo de Autenticação:** `Authorization: Basic <base64(TOKEN)>`
   - Valor codificado: `Basic MTA1OjFjMGUyZDc2NGJlODQxZDliODhiMDI0MTQzMzdkN2JiYzJkZDRlMWJiOTQwMjk1MzQzYjM2ZDMxY2JhYTlmOTg=`
 

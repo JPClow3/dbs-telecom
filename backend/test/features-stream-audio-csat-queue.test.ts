@@ -3,6 +3,8 @@ import { queueService } from '../src/modules/queue/queue.service.js';
 import { csatService } from '../src/modules/csat/csat.service.js';
 import { fastRouterService } from '../src/modules/ai/fast-router.service.js';
 import { chatService } from '../src/modules/chat/chat.service.js';
+import { queueRepository } from '../src/modules/queue/queue.repository.js';
+import { csatRepository } from '../src/modules/csat/csat.repository.js';
 import { app } from '../src/app.js';
 
 describe('🚀 Novas Features DBS Telecom: Streaming SSE, Áudio, CSAT & Fila Virtual', () => {
@@ -10,8 +12,9 @@ describe('🚀 Novas Features DBS Telecom: Streaming SSE, Áudio, CSAT & Fila Vi
 
   // --- 1. FILA VIRTUAL & TRANSBORDO HUMANO ---
   describe('👤 Máquina de Estados da Fila Virtual (QueueService)', () => {
-    it('deve adicionar cliente à fila com posição e tempo estimado calculados', () => {
-      const entry = queueService.joinQueue({
+    it('deve adicionar cliente à fila com posição e tempo estimado calculados', async () => {
+      await queueRepository.clearAll();
+      const entry = await queueService.joinQueue({
         sessionId: 'sess-test-1',
         clientId: 'test-client-1',
         clientName: 'Carlos Eduardo',
@@ -26,18 +29,18 @@ describe('🚀 Novas Features DBS Telecom: Streaming SSE, Áudio, CSAT & Fila Vi
       expect(entry.department).toBe('SUPORTE');
     });
 
-    it('deve consultar o status em tempo real da fila', () => {
-      const status = queueService.getQueueStatus('test-client-1');
+    it('deve consultar o status em tempo real da fila', async () => {
+      const status = await queueService.getQueueStatus('test-client-1');
       expect(status.inQueue).toBe(true);
       expect(status.entry?.clientId).toBe('test-client-1');
       expect(status.totalInQueue).toBeGreaterThanOrEqual(1);
     });
 
-    it('deve avançar a fila e alocar um especialista quando a posição for alcançada', () => {
+    it('deve avançar a fila e alocar um especialista quando a posição for alcançada', async () => {
       // Avança até ser atribuído
-      let entry = queueService.advanceQueue('test-client-1');
+      let entry = await queueService.advanceQueue('test-client-1');
       if (entry?.status === 'QUEUED') {
-        entry = queueService.advanceQueue('test-client-1');
+        entry = await queueService.advanceQueue('test-client-1');
       }
 
       expect(entry?.status).toBe('ASSIGNED');
@@ -45,11 +48,11 @@ describe('🚀 Novas Features DBS Telecom: Streaming SSE, Áudio, CSAT & Fila Vi
       expect(entry?.assignedAgent?.name).toBeTruthy();
     });
 
-    it('deve permitir cancelar ou sair da fila', () => {
-      const leaveResult = queueService.leaveQueue('test-client-1');
+    it('deve permitir cancelar ou sair da fila', async () => {
+      const leaveResult = await queueService.leaveQueue('test-client-1');
       expect(leaveResult.success).toBe(true);
 
-      const status = queueService.getQueueStatus('test-client-1');
+      const status = await queueService.getQueueStatus('test-client-1');
       expect(status.inQueue).toBe(false);
     });
 
@@ -72,8 +75,9 @@ describe('🚀 Novas Features DBS Telecom: Streaming SSE, Áudio, CSAT & Fila Vi
 
   // --- 2. PESQUISA DE SATISFAÇÃO (CSAT / NPS) ---
   describe('⭐ Pesquisa de Satisfação CSAT & NPS (CSATService)', () => {
-    it('deve registrar avaliação com notas, tags e comentários', () => {
-      const feedback = csatService.submitFeedback({
+    it('deve registrar avaliação com notas, tags e comentários', async () => {
+      await csatRepository.clearAll();
+      const feedback = await csatService.submitFeedback({
         clientId: testClientId,
         clientName: 'Emanuel da Silva',
         rating: 5,
@@ -91,8 +95,8 @@ describe('🚀 Novas Features DBS Telecom: Streaming SSE, Áudio, CSAT & Fila Vi
       expect(feedback.targetProtocol).toBe('DBS-998877');
     });
 
-    it('deve consolidar métricas de CSAT, NPS e distribuição de estrelas', () => {
-      const stats = csatService.getStats();
+    it('deve consolidar métricas de CSAT, NPS e distribuição de estrelas', async () => {
+      const stats = await csatService.getStats();
 
       expect(stats.totalResponses).toBeGreaterThanOrEqual(1);
       expect(stats.averageRating).toBeGreaterThanOrEqual(1);
@@ -102,8 +106,8 @@ describe('🚀 Novas Features DBS Telecom: Streaming SSE, Áudio, CSAT & Fila Vi
       expect(stats.ratingDistribution[5]).toBeGreaterThanOrEqual(1);
     });
 
-    it('deve consultar histórico de avaliações do cliente', () => {
-      const feedbacks = csatService.getFeedbackByClientId(testClientId);
+    it('deve consultar histórico de avaliações do cliente', async () => {
+      const feedbacks = await csatService.getFeedbackByClientId(testClientId);
       expect(feedbacks.length).toBeGreaterThanOrEqual(1);
       expect(feedbacks[0].clientId).toBe(testClientId);
     });
@@ -151,6 +155,7 @@ describe('🚀 Novas Features DBS Telecom: Streaming SSE, Áudio, CSAT & Fila Vi
   // --- 5. INJEÇÃO DE CARDS CONTEXTUAIS (CSAT, FILA, FATURAS) ---
   describe('🃏 Injeção Automática de Cards Interativos', () => {
     it('deve gerar card de Fila Virtual quando o cliente solicitar falar com atendente', async () => {
+      await queueRepository.clearAll();
       const response = await chatService.processMessage(
         'session-queue-test',
         'Gostaria de falar com um atendente humano',

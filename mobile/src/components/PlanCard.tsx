@@ -193,6 +193,7 @@ export const PlanCard: React.FC<PlanCardProps> = ({ plan, onSelect }) => {
         style={[styles.hireBtn, { backgroundColor: colors.primary }]}
         onPress={handleSelect}
         activeOpacity={0.8}
+        accessibilityRole="button"
       >
         <Text style={styles.hireBtnText}>Quero Contratar Este Plano</Text>
         <ChevronRight size={16} color="#FFFFFF" strokeWidth={2.5} />

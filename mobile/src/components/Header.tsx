@@ -2,21 +2,39 @@ import React from 'react';
 import { View, Text, StyleSheet, Image, TouchableOpacity } from 'react-native';
 import { SHADOWS, RADIUS } from '../constants/theme';
 import { Customer } from '../types';
-import { LogOut } from 'lucide-react-native';
+import { LogOut, Bell } from 'lucide-react-native';
 import { useAppTheme } from '../context/ThemeContext';
 import { hapticFeedback } from '../utils/haptics';
+import { useNetworkStatus } from '../hooks/useNetworkStatus';
 
 interface HeaderProps {
   customer?: Customer | null;
   onLogout?: () => void;
+  onOpenNotifications?: () => void;
+  unreadCount?: number;
 }
 
-export const Header: React.FC<HeaderProps> = ({ customer, onLogout }) => {
+export const Header: React.FC<HeaderProps> = ({
+  customer,
+  onLogout,
+  onOpenNotifications,
+  unreadCount = 2,
+}) => {
   const { colors, isDark } = useAppTheme();
+  const { isConnected, isInternetReachable } = useNetworkStatus();
+  const isAppOnline = isConnected && isInternetReachable !== false;
+  const isDemoSession = Boolean(customer?.isDemo);
+  const statusColor = isDemoSession ? colors.warning : isAppOnline ? colors.success : colors.danger;
+  const statusLabel = isDemoSession ? 'Ambiente demo' : isAppOnline ? 'App online' : 'Sem internet';
 
   const handleLogoutPress = () => {
     hapticFeedback.light();
     if (onLogout) onLogout();
+  };
+
+  const handleNotificationsPress = () => {
+    hapticFeedback.light();
+    if (onOpenNotifications) onOpenNotifications();
   };
 
   return (
@@ -51,16 +69,47 @@ export const Header: React.FC<HeaderProps> = ({ customer, onLogout }) => {
             <Text style={[styles.title, { color: colors.secondary }]}>DBS</Text>
             <Text style={[styles.titleAccent, { color: colors.primary }]}>TELECOM</Text>
           </View>
-          <View style={styles.statusPill}>
-            <View style={[styles.pulseDot, { backgroundColor: colors.success }]} />
-            <Text style={[styles.statusText, { color: colors.textMuted }]}>Fibra 100% Conectada</Text>
+          <View style={styles.statusPill} accessibilityLiveRegion="polite">
+            <View
+              style={[
+                styles.pulseDot,
+                { backgroundColor: statusColor },
+              ]}
+            />
+            <Text style={[styles.statusText, { color: colors.textMuted }]}>
+              {statusLabel}
+            </Text>
           </View>
         </View>
       </View>
 
-      {/* Lado Direito: Perfil do Cliente & Ações Rápidas */}
+      {/* Lado Direito: Notificações & Perfil do Cliente */}
       {customer && (
         <View style={styles.rightSection}>
+          {onOpenNotifications && (
+            <TouchableOpacity
+              style={[
+                styles.iconBtn,
+                {
+                  backgroundColor: colors.cardSubdued,
+                  borderColor: colors.border,
+                },
+              ]}
+              onPress={handleNotificationsPress}
+              activeOpacity={0.7}
+              accessibilityRole="button"
+              accessibilityLabel="Notificações"
+              accessibilityHint="Abrir alertas e lembretes da conta"
+            >
+              <Bell size={16} color={colors.text} />
+              {unreadCount > 0 && (
+                <View style={[styles.badge, { backgroundColor: colors.primary }]}>
+                  <Text style={styles.badgeText}>{unreadCount > 9 ? '9+' : unreadCount}</Text>
+                </View>
+              )}
+            </TouchableOpacity>
+          )}
+
           <View
             style={[
               styles.userCard,
@@ -78,7 +127,7 @@ export const Header: React.FC<HeaderProps> = ({ customer, onLogout }) => {
                 {customer.nome.split(' ')[0]}
               </Text>
               <Text style={[styles.userSubtitle, { color: colors.textMuted }]}>
-                Contrato #{customer.id}
+                #{customer.id}
               </Text>
             </View>
           </View>
@@ -94,7 +143,9 @@ export const Header: React.FC<HeaderProps> = ({ customer, onLogout }) => {
               ]}
               onPress={handleLogoutPress}
               activeOpacity={0.7}
+              accessibilityRole="button"
               accessibilityLabel="Trocar de conta"
+              accessibilityHint="Sair desta conta e voltar para o login"
             >
               <LogOut size={15} color={colors.textMuted} />
             </TouchableOpacity>
@@ -204,11 +255,36 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   logoutBtn: {
-    width: 32,
-    height: 32,
+    width: 40,
+    height: 40,
     borderRadius: RADIUS.full,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
+  },
+  iconBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: RADIUS.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    position: 'relative',
+  },
+  badge: {
+    position: 'absolute',
+    top: -3,
+    right: -3,
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 3,
+  },
+  badgeText: {
+    color: '#FFFFFF',
+    fontSize: 9,
+    fontWeight: '900',
   },
 });

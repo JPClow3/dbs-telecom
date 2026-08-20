@@ -7,8 +7,17 @@ import {
   Platform,
   Animated,
 } from 'react-native';
-import { COLORS, SHADOWS, RADIUS } from '../constants/theme';
-import { Mic, Trash2, Send, StopCircle, Radio } from 'lucide-react-native';
+import {
+  AudioModule,
+  RecordingPresets,
+  setAudioModeAsync,
+  useAudioRecorder,
+} from 'expo-audio';
+import * as FileSystem from 'expo-file-system/legacy';
+import { SHADOWS, RADIUS } from '../constants/theme';
+import { useAppTheme } from '../context/ThemeContext';
+import { hapticFeedback } from '../utils/haptics';
+import { Trash2, Send, Radio } from 'lucide-react-native';
 
 interface AudioRecorderProps {
   onSendAudio: (audioBase64: string, mimeType: string, durationSeconds: number) => void;
@@ -19,13 +28,21 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({
   onSendAudio,
   onCancel,
 }) => {
+  const { colors } = useAppTheme();
   const [isRecording, setIsRecording] = useState(true);
   const [duration, setDuration] = useState(0);
+
+  const nativeRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const nativeRecordingStartedRef = useRef(false);
+
+  // Web MediaRecorder refs
   const mediaRecorderRef = useRef<any>(null);
+  const mediaStreamRef = useRef<any>(null);
   const audioChunksRef = useRef<any[]>([]);
+
   const pulseAnim = useRef(new Animated.Value(1)).current;
 
-  // Pulse animation while recording
+  // Animação de pulso contínuo durante a gravação
   useEffect(() => {
     if (isRecording) {
       Animated.loop(
@@ -47,7 +64,7 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({
     }
   }, [isRecording]);
 
-  // Duration Timer
+  // Cronômetro da gravação
   useEffect(() => {
     let interval: any;
     if (isRecording) {
@@ -58,35 +75,78 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({
     return () => clearInterval(interval);
   }, [isRecording]);
 
-  // Web MediaRecorder initialization
+  // Inicialização da Gravação Nativa (expo-audio) ou Web (MediaRecorder)
   useEffect(() => {
-    if (Platform.OS === 'web' && typeof navigator !== 'undefined' && navigator.mediaDevices?.getUserMedia) {
-      navigator.mediaDevices
-        .getUserMedia({ audio: true })
-        .then((stream) => {
-          const mediaRecorder = new (window as any).MediaRecorder(stream);
-          mediaRecorderRef.current = mediaRecorder;
-          audioChunksRef.current = [];
+    let isCancelled = false;
 
-          mediaRecorder.ondataavailable = (event: any) => {
-            if (event.data && event.data.size > 0) {
-              audioChunksRef.current.push(event.data);
+    const startRecording = async () => {
+      if (Platform.OS === 'web') {
+        if (typeof navigator !== 'undefined' && navigator.mediaDevices?.getUserMedia) {
+          try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            if (isCancelled) {
+              stream.getTracks().forEach((t) => t.stop());
+              return;
             }
-          };
+            mediaStreamRef.current = stream;
+            const mediaRecorder = new (window as any).MediaRecorder(stream);
+            mediaRecorderRef.current = mediaRecorder;
+            audioChunksRef.current = [];
 
-          mediaRecorder.start(200);
-        })
-        .catch((err) => {
-          console.warn('Microfone web não acessível ou sem permissão:', err);
-        });
-    }
+            mediaRecorder.ondataavailable = (event: any) => {
+              if (event.data && event.data.size > 0) {
+                audioChunksRef.current.push(event.data);
+              }
+            };
 
-    return () => {
-      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-        mediaRecorderRef.current.stop();
+            mediaRecorder.start(200);
+          } catch (err) {
+            console.warn('[AudioRecorder] Microfone web indisponível ou sem permissão:', err);
+          }
+        }
+      } else {
+        // Plataforma Nativa (Android & iOS)
+        try {
+          const perm = await AudioModule.requestRecordingPermissionsAsync();
+          if (!perm.granted) {
+            console.warn('[AudioRecorder] Permissão de microfone negada no dispositivo.');
+            return;
+          }
+
+          await setAudioModeAsync({
+            allowsRecording: true,
+            playsInSilentMode: true,
+          });
+
+          if (isCancelled) return;
+
+          await nativeRecorder.prepareToRecordAsync();
+          nativeRecorder.record();
+          nativeRecordingStartedRef.current = true;
+        } catch (err) {
+          console.warn('[AudioRecorder] Erro ao iniciar gravação nativa expo-audio:', err);
+        }
       }
     };
-  }, []);
+
+    startRecording();
+
+    return () => {
+      isCancelled = true;
+      if (nativeRecordingStartedRef.current) {
+        nativeRecorder.stop().catch(() => {});
+        nativeRecordingStartedRef.current = false;
+      }
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        try { mediaRecorderRef.current.stop(); } catch {}
+      }
+      if (mediaStreamRef.current) {
+        try {
+          mediaStreamRef.current.getTracks().forEach((t: any) => t.stop());
+        } catch {}
+      }
+    };
+  }, [nativeRecorder]);
 
   const formatTime = (secs: number) => {
     const m = Math.floor(secs / 60);
@@ -95,66 +155,127 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({
   };
 
   const handleStopAndSend = async () => {
+    hapticFeedback.medium();
     setIsRecording(false);
     const audioDuration = Math.max(1, duration);
 
-    // Se estiver no ambiente Web com MediaRecorder
-    if (Platform.OS === 'web' && mediaRecorderRef.current) {
+    // 1. Gravação Nativa (Android / iOS)
+    if (nativeRecordingStartedRef.current) {
       try {
-        mediaRecorderRef.current.stop();
-        mediaRecorderRef.current.onstop = async () => {
-          const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-          const reader = new FileReader();
-          reader.readAsDataURL(blob);
-          reader.onloadend = () => {
-            const base64Data = (reader.result as string).split(',')[1];
-            onSendAudio(base64Data, 'audio/webm', audioDuration);
-          };
-        };
-        return;
+        await nativeRecorder.stop();
+        const uri = nativeRecorder.uri;
+        nativeRecordingStartedRef.current = false;
+
+        if (uri) {
+          const base64Data = await FileSystem.readAsStringAsync(uri, {
+            encoding: FileSystem.EncodingType.Base64,
+          });
+
+          const mimeType = Platform.OS === 'ios' ? 'audio/m4a' : 'audio/mp4';
+          onSendAudio(base64Data, mimeType, audioDuration);
+          return;
+        }
       } catch (e) {
-        console.warn('Erro ao finalizar gravação web:', e);
+        console.warn('[AudioRecorder] Erro ao processar arquivo de áudio nativo:', e);
       }
     }
 
-    // Fallback de áudio sintetizado / compatível
-    const dummyAudioBase64 = 'UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=';
-    onSendAudio(dummyAudioBase64, 'audio/wav', audioDuration);
+    // 2. Gravação Web (MediaRecorder)
+    if (Platform.OS === 'web' && mediaRecorderRef.current) {
+      try {
+        const stream = mediaStreamRef.current;
+        const currentRecorder = mediaRecorderRef.current;
+        const recordedMimeType = currentRecorder.mimeType || 'audio/webm';
+
+        currentRecorder.onstop = async () => {
+          if (stream) {
+            stream.getTracks().forEach((t: any) => t.stop());
+          }
+          const blob = new Blob(audioChunksRef.current, { type: recordedMimeType });
+          const reader = new FileReader();
+          reader.readAsDataURL(blob);
+          reader.onloadend = () => {
+            const resultStr = reader.result as string;
+            const base64Data = resultStr.includes(',') ? resultStr.split(',')[1] : resultStr;
+            onSendAudio(base64Data, recordedMimeType, audioDuration);
+          };
+        };
+
+        if (currentRecorder.state !== 'inactive') {
+          currentRecorder.stop();
+        }
+        return;
+      } catch (e) {
+        console.warn('[AudioRecorder] Erro ao finalizar gravação web:', e);
+      }
+    }
+
+    console.warn('[AudioRecorder] Nenhuma gravação de áudio válida foi produzida.');
+    onCancel();
+  };
+
+  const handleCancelRecording = async () => {
+    hapticFeedback.light();
+    setIsRecording(false);
+    if (nativeRecordingStartedRef.current) {
+      try {
+        await nativeRecorder.stop();
+      } catch {}
+      nativeRecordingStartedRef.current = false;
+    }
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      try {
+        mediaRecorderRef.current.stop();
+      } catch {}
+    }
+    if (mediaStreamRef.current) {
+      try {
+        mediaStreamRef.current.getTracks().forEach((t: any) => t.stop());
+      } catch {}
+    }
+    onCancel();
   };
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { backgroundColor: colors.card, borderTopColor: colors.border }]}>
       {/* Botão de Cancelar */}
       <TouchableOpacity
-        style={styles.cancelBtn}
-        onPress={onCancel}
+        style={[styles.cancelBtn, { backgroundColor: colors.dangerLight, borderColor: colors.dangerBorder }]}
+        onPress={handleCancelRecording}
         activeOpacity={0.7}
+        testID="cancel-audio-btn"
       >
-        <Trash2 size={18} color={COLORS.dangerDark} strokeWidth={2.2} />
+        <Trash2 size={18} color={colors.dangerDark} strokeWidth={2.2} />
       </TouchableOpacity>
 
       {/* Indicador de Gravação e Onda Sonora */}
-      <View style={styles.recordingIndicator}>
+      <View
+        style={[
+          styles.recordingIndicator,
+          { backgroundColor: colors.dangerLight, borderColor: colors.dangerBorder },
+        ]}
+      >
         <Animated.View style={[styles.pulseCircle, { transform: [{ scale: pulseAnim }] }]}>
-          <Radio size={14} color={COLORS.dangerDark} strokeWidth={2.5} />
+          <Radio size={14} color={colors.dangerDark} strokeWidth={2.5} />
         </Animated.View>
 
-        <Text style={styles.timerText}>{formatTime(duration)}</Text>
+        <Text style={[styles.timerText, { color: colors.dangerDark }]}>{formatTime(duration)}</Text>
 
         <View style={styles.waveContainer}>
           {[4, 8, 14, 10, 16, 8, 12, 6, 14, 10, 6].map((h, i) => (
-            <View key={i} style={[styles.waveBar, { height: h }]} />
+            <View key={i} style={[styles.waveBar, { height: h, backgroundColor: colors.danger }]} />
           ))}
         </View>
       </View>
 
       {/* Botão de Enviar Áudio */}
       <TouchableOpacity
-        style={styles.sendAudioBtn}
+        style={[styles.sendAudioBtn, { backgroundColor: colors.primary }]}
         onPress={handleStopAndSend}
         activeOpacity={0.85}
+        testID="send-audio-btn"
       >
-        <Send size={16} color={COLORS.white} strokeWidth={2.5} />
+        <Send size={16} color="#FFFFFF" strokeWidth={2.5} />
       </TouchableOpacity>
     </View>
   );
@@ -166,18 +287,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 12,
     paddingVertical: 10,
-    backgroundColor: COLORS.white,
     borderTopWidth: 1,
-    borderTopColor: COLORS.border,
     gap: 10,
   },
   cancelBtn: {
     width: 38,
     height: 38,
     borderRadius: RADIUS.full,
-    backgroundColor: COLORS.dangerLight,
     borderWidth: 1,
-    borderColor: COLORS.dangerBorder,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -185,9 +302,7 @@ const styles = StyleSheet.create({
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: COLORS.dangerLight,
     borderWidth: 1,
-    borderColor: COLORS.dangerBorder,
     borderRadius: RADIUS.full,
     paddingHorizontal: 14,
     paddingVertical: 8,
@@ -197,15 +312,14 @@ const styles = StyleSheet.create({
     width: 20,
     height: 20,
     borderRadius: RADIUS.full,
-    backgroundColor: COLORS.white,
+    backgroundColor: '#FFFFFF',
     alignItems: 'center',
     justifyContent: 'center',
   },
   timerText: {
     fontSize: 13,
     fontWeight: '800',
-    color: COLORS.dangerDark,
-    fontFamily: 'monospace',
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
   },
   waveContainer: {
     flex: 1,
@@ -217,14 +331,12 @@ const styles = StyleSheet.create({
   },
   waveBar: {
     width: 3,
-    backgroundColor: COLORS.danger,
     borderRadius: 2,
   },
   sendAudioBtn: {
     width: 42,
     height: 42,
     borderRadius: RADIUS.full,
-    backgroundColor: COLORS.primary,
     alignItems: 'center',
     justifyContent: 'center',
     ...SHADOWS.primary,

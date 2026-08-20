@@ -42,6 +42,9 @@ describe('🔐 1. JWT Authentication & Anti-IDOR Security Suite', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.authenticated).toBe(true);
+    expect(res.body.mode).toBe('demo');
+    expect(res.body.dataState).toBe('DEMO');
+    expect(res.body.client.isDemo).toBe(true);
     expect(res.body.token).toBeDefined();
     expect(res.body.expiresIn).toBeDefined();
 
@@ -141,37 +144,37 @@ describe('🔐 1. JWT Authentication & Anti-IDOR Security Suite', () => {
   });
 });
 
-describe('💾 2. SQLite Database & Chat History Persistence Suite', () => {
-  beforeEach(() => {
-    chatRepository.clearAll();
+describe('💾 2. PostgreSQL Database & Chat History Persistence Suite', () => {
+  beforeEach(async () => {
+    await chatRepository.clearAll();
   });
 
-  it('deve criar e persistir uma nova sessão no banco de dados SQLite', () => {
-    const session = chatRepository.getOrCreateSession('session-test-sql-1', '2270', 'Emanuel da Silva');
+  it('deve criar e persistir uma nova sessão no banco PostgreSQL', async () => {
+    const session = await chatRepository.getOrCreateSession('session-test-sql-1', '2270', 'Emanuel da Silva');
     expect(session.sessionId).toBe('session-test-sql-1');
     expect(session.clientId).toBe('2270');
     expect(session.clientName).toBe('Emanuel da Silva');
     expect(session.currentDepartment).toBe('GERAL');
 
-    // Consulta direta no SQLite
+    // Consulta direta no PostgreSQL
     const db = getDatabase();
-    const row = db.prepare('SELECT * FROM chat_sessions WHERE session_id = ?').get('session-test-sql-1') as any;
+    const row = await db.prepare('SELECT * FROM chat_sessions WHERE session_id = ?').get('session-test-sql-1') as any;
     expect(row).toBeDefined();
     expect(row.client_id).toBe('2270');
   });
 
-  it('deve persistir mensagens de usuário e robô com cards contextuais no SQLite', () => {
+  it('deve persistir mensagens de usuário e robô com cards contextuais no PostgreSQL', async () => {
     const sessionId = 'session-test-sql-2';
-    chatRepository.getOrCreateSession(sessionId, '2270', 'Emanuel');
+    await chatRepository.getOrCreateSession(sessionId, '2270', 'Emanuel');
 
-    chatRepository.addMessage(sessionId, {
+    await chatRepository.addMessage(sessionId, {
       id: 'msg-1',
       sender: 'USER',
       text: 'Preciso do meu boleto',
       timestamp: '2026-08-20T00:00:01.000Z',
     });
 
-    chatRepository.addMessage(sessionId, {
+    await chatRepository.addMessage(sessionId, {
       id: 'msg-2',
       sender: 'BOT',
       text: 'Localizei sua fatura no valor de R$ 119,90.',
@@ -198,7 +201,7 @@ describe('💾 2. SQLite Database & Chat History Persistence Suite', () => {
       },
     });
 
-    const history = chatRepository.getSessionHistory(sessionId);
+    const history = await chatRepository.getSessionHistory(sessionId);
     expect(history.length).toBe(2);
     expect(history[0].sender).toBe('USER');
     expect(history[0].text).toBe('Preciso do meu boleto');
@@ -220,7 +223,7 @@ describe('💾 2. SQLite Database & Chat History Persistence Suite', () => {
     (chatService as any).sessions.clear();
 
     // 3. Ao consultar o histórico da sessão, deve carregar perfeitamente do SQLite
-    const history = chatService.getSessionHistory(sessionId);
+    const history = await chatService.getSessionHistory(sessionId);
     expect(history.length).toBeGreaterThanOrEqual(2); // Usuário + Bot
     expect(history[0].text).toBe('Minha internet está lenta 🛠️');
     expect(history[1].department).toBe('SUPORTE');

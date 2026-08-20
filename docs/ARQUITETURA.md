@@ -11,7 +11,7 @@ O sistema adota o padrão **BFF (Backend for Frontend)** combinado com uma arqui
 ```mermaid
 graph TB
     subgraph ClientSpace["📱 Camada do Cliente (Frontend)"]
-        MobileApp["📱 App Mobile (React Native / Expo SDK 51)"]
+        MobileApp["📱 App Mobile (React Native 0.86 / Expo SDK 57)"]
         WebPreview["💻 Web Preview / PWA"]
     end
 
@@ -23,7 +23,7 @@ graph TB
             Tier1["🛡️ Tier 1: Input Guardrail (Anti-Jailbreak / Escopo / DoS)"]
             ContextBuilder["📦 Dynamic IXC Context Bundle Builder (RAG Leve)"]
             Tier2["☁️ Tier 2: Google Gemini Provider (Google AI Studio)"]
-            Tier3["⚙️ Tier 3: Heuristic Fallback Engine (100% Offline)"]
+            Tier3["⚙️ Tier 3: Heuristic Fallback Engine (prévia local)"]
             Tier4["🔒 Tier 4: Output Guardrail (Zod Schema / Anti-Alucinação / LGPD)"]
         end
 
@@ -76,7 +76,7 @@ O aplicativo mobile nunca se comunica diretamente com a API do IXC Soft ou com o
 
 ### 2.2 Sistema de IA Híbrido em 4 Níveis (4-Tier Routing Engine)
 
-Para garantir **máxima performance (<50ms para rotas diretas)**, **alta precisão semântica**, **custo otimizado** e **100% de disponibilidade**, o backend emprega uma arquitetura de IA em camadas:
+Para buscar **baixa latência em rotas diretas**, **precisão semântica**, **custo otimizado** e uma degradação explícita quando provedores falham, o backend emprega uma arquitetura de IA em camadas:
 
 ```mermaid
 flowchart TD
@@ -111,7 +111,7 @@ flowchart TD
   - Saída forçada no formato JSON com `responseMimeType: "application/json"`.
 * **Tier 3 — Heuristic Fallback Engine:**
   - Entra em operação automática e transparente caso a chave do Gemini não esteja configurada ou ocorra timeout de rede.
-  - Garante que a aplicação continue funcionando 100% mesmo em ambiente totalmente offline.
+  - Pode manter uma prévia local em ambiente offline, sempre marcada como demonstração e sem confirmar ações financeiras, contratos ou chamados.
 * **Tier 4 — Output Guardrail & Conformidade LGPD:**
   - Valida a estrutura JSON com **Zod Schema**.
   - Impede alucinações financeiras (se a base IXC não tem faturas abertas, a IA é proibida de gerar boletos fictícios).
@@ -255,7 +255,8 @@ backend/
 │   │   └── commercial/         # Catálogo de planos DBS, recomendação e Script de Vendas
 │   │       └── commercial.service.ts
 │   └── routes/
-│       └── api.router.ts       # Declaração dos endpoints REST da API BFF
+│       ├── api.router.ts       # Composition root dos registradores de rotas
+│       └── *.routes.ts         # Endpoints REST separados por domínio
 └── test/                       # Testes de integração do Backend e Guardrails
     ├── ai-gemini-guardrails.test.ts
     └── backend.test.ts
@@ -265,7 +266,7 @@ backend/
 ```
 mobile/
 ├── App.tsx                     # Componente Raiz com navegação por Tabs e Header institucional
-├── app.json                    # Configuração Expo SDK 51 (nome, ícones, splash screen)
+├── app.json                    # Configuração Expo SDK 57 (nome, ícones e plugins nativos)
 ├── package.json                # Dependências: react-native, expo, lucide-react-native
 ├── tsconfig.json               # Configuração TypeScript
 ├── assets/                     # Logotipo oficial da DBS Telecom (PNG e Vetorial)

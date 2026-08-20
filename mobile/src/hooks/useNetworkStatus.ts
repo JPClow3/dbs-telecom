@@ -6,6 +6,7 @@ export interface NetworkStatus {
   isConnected: boolean;
   isInternetReachable: boolean | null;
   connectionType: string;
+  refresh?: () => Promise<void>;
 }
 
 export function useNetworkStatus(): NetworkStatus {
@@ -64,5 +65,28 @@ export function useNetworkStatus(): NetworkStatus {
     };
   }, []);
 
-  return status;
+  const refresh = async () => {
+    if (Platform.OS === 'web') {
+      const online = typeof navigator === 'undefined' ? true : navigator.onLine;
+      setStatus({
+        isConnected: online,
+        isInternetReachable: online,
+        connectionType: online ? 'wifi' : 'none',
+        refresh,
+      });
+      return;
+    }
+
+    const state = await NetInfo.fetch();
+    const connected = state.isConnected ?? true;
+    const reachable = state.isInternetReachable ?? connected;
+    setStatus({
+      isConnected: connected && reachable !== false,
+      isInternetReachable: reachable,
+      connectionType: state.type || 'unknown',
+      refresh,
+    });
+  };
+
+  return { ...status, refresh };
 }

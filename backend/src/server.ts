@@ -1,5 +1,8 @@
 import { createApp } from './app.js';
-import { CONFIG } from './config/env.js';
+import { CONFIG, validateEnv } from './config/env.js';
+
+// Validação de segurança em ambiente de produção
+validateEnv();
 
 const app = createApp();
 

@@ -1,4 +1,5 @@
 import { CONFIG } from '../../config/env.js';
+import { ixcCache } from './ixc.cache.js';
 import {
   IXCClientRecord,
   IXCContractRecord,
@@ -9,13 +10,29 @@ import {
   IXCRadacctRecord,
 } from './ixc.types.js';
 
+export class IXCUnavailableError extends Error {
+  readonly code = 'IXC_UNAVAILABLE';
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'IXCUnavailableError';
+  }
+}
+
 export class IXCService {
   private baseUrl: string;
-  private authHeader: string;
 
   constructor() {
     this.baseUrl = CONFIG.ixc.baseUrl.replace(/\/+$/, '');
-    this.authHeader = 'Basic ' + Buffer.from(CONFIG.ixc.token).toString('base64');
+  }
+
+  private get authHeader(): string {
+    return 'Basic ' + Buffer.from(CONFIG.ixc.token).toString('base64');
+  }
+
+  private unavailable(endpoint: string, cause?: unknown): IXCUnavailableError {
+    const detail = cause instanceof Error ? cause.message : 'provider unavailable';
+    return new IXCUnavailableError(`IXC indisponível para ${endpoint}: ${detail}`);
   }
 
   /**
@@ -23,7 +40,15 @@ export class IXCService {
    */
   async query<T>(endpoint: string, params: IXCQueryParams): Promise<IXCResponse<T>> {
     const url = `${this.baseUrl}/${endpoint}`;
-    
+
+    if (CONFIG.demoMode && !CONFIG.ixc.token) {
+      return this.getMockFallback<T>(endpoint, params);
+    }
+
+    if (!CONFIG.demoMode && !CONFIG.ixc.token) {
+      throw this.unavailable(endpoint, 'IXC_TOKEN não configurado');
+    }
+
     try {
       const response = await fetch(url, {
         method: 'POST',
@@ -32,7 +57,10 @@ export class IXCService {
           'Content-Type': 'application/json',
           'ixcsoft': 'listar',
         },
-        signal: AbortSignal.timeout(3500),
+        // IXC WebService is an external ERP and can take a few seconds from
+        // an edge Worker. A 1.2s timeout caused false "server unavailable"
+        // errors even when the same authenticated request succeeds.
+        signal: AbortSignal.timeout(8000),
         body: JSON.stringify(params),
       });
 
@@ -41,6 +69,11 @@ export class IXCService {
       }
 
       const data: any = await response.json();
+      const validEmptyResult = data && typeof data === 'object' &&
+        data.registros === undefined && ('page' in data || 'total' in data);
+      if (!data || (!Array.isArray(data.registros) && !validEmptyResult)) {
+        throw new Error('Resposta IXC fora do formato esperado.');
+      }
       return {
         page: data.page || '1',
         total: data.total || (data.registros ? data.registros.length : 0),
@@ -48,19 +81,36 @@ export class IXCService {
       };
     } catch (error: any) {
       console.warn(`[IXCService] Erro ao consultar ${endpoint}:`, error.message);
-      // Fallback gracioso para testes e demonstração offline
-      return this.getMockFallback<T>(endpoint, params);
+      // Offline fixtures are opt-in test/demo behavior only. Production and
+      // normal development must surface provider failure to the caller.
+      if (CONFIG.demoMode) return this.getMockFallback<T>(endpoint, params);
+      throw this.unavailable(endpoint, error);
     }
   }
 
   /**
-   * Busca cliente por CPF ou CNPJ (sanitizado)
+   * Busca cliente por CPF ou CNPJ (sanitizado) com cache em memória
    */
   async findClientByCpfCnpj(cpfCnpj: string): Promise<IXCClientRecord | null> {
     const cleanDoc = cpfCnpj.replace(/\D/g, '');
-    
+    const cacheKey = `client:doc:${cleanDoc}`;
+
+    const cached = ixcCache.get<IXCClientRecord>(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
+    if (CONFIG.demoMode && (cleanDoc === '15429370789' || cleanDoc === '2270')) {
+      const mock = this.getMockFallback<IXCClientRecord>('cliente', { query: '154.293.707-89', qtype: 'cnpj_cpf' }).registros[0];
+      if (mock) {
+        ixcCache.set(cacheKey, mock, 300);
+        ixcCache.set(`client:id:${mock.id}`, mock, 300);
+        return mock;
+      }
+    }
+
     // 1. Tenta buscar pelo formato digitado ou com máscara
-    const formattedCpf = cleanDoc.length === 11 
+    const formattedCpf = cleanDoc.length === 11
       ? cleanDoc.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4')
       : cleanDoc;
 
@@ -86,16 +136,41 @@ export class IXCService {
     // Se ainda não achar e for busca de teste pelo ID
     if (res.registros.length === 0 && !isNaN(Number(cleanDoc)) && Number(cleanDoc) < 10000) {
       const resById = await this.findClientById(cleanDoc);
-      if (resById) return resById;
+      if (resById) {
+        ixcCache.set(cacheKey, resById, 60);
+        return resById;
+      }
     }
 
-    return res.registros.length > 0 ? res.registros[0] : null;
+    const client = res.registros.length > 0 ? res.registros[0] : null;
+    if (client) {
+      ixcCache.set(cacheKey, client, 60);
+      if (client.id) {
+        ixcCache.set(`client:id:${client.id}`, client, 60);
+      }
+    }
+
+    return client;
   }
 
   /**
-   * Busca cliente por ID
+   * Busca cliente por ID com cache em memória
    */
   async findClientById(clientId: string): Promise<IXCClientRecord | null> {
+    const cacheKey = `client:id:${clientId}`;
+    const cached = ixcCache.get<IXCClientRecord>(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
+    if (CONFIG.demoMode && clientId === '2270') {
+      const mock = this.getMockFallback<IXCClientRecord>('cliente', { query: '2270', qtype: 'id' }).registros[0];
+      if (mock) {
+        ixcCache.set(cacheKey, mock, 300);
+        return mock;
+      }
+    }
+
     const res = await this.query<IXCClientRecord>('cliente', {
       qtype: 'cliente.id',
       query: clientId,
@@ -104,13 +179,28 @@ export class IXCService {
       rp: '1',
     });
 
-    return res.registros.length > 0 ? res.registros[0] : null;
+    const client = res.registros.length > 0 ? res.registros[0] : null;
+    if (client) {
+      ixcCache.set(cacheKey, client, 60);
+      if (client.cnpj_cpf) {
+        const clean = client.cnpj_cpf.replace(/\D/g, '');
+        if (clean) ixcCache.set(`client:doc:${clean}`, client, 60);
+      }
+    }
+
+    return client;
   }
 
   /**
-   * Busca contratos ativos do cliente
+   * Busca contratos ativos do cliente com cache em memória
    */
   async getClientContracts(clientId: string): Promise<IXCContractRecord[]> {
+    const cacheKey = `contracts:${clientId}`;
+    const cached = ixcCache.get<IXCContractRecord[]>(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
     const res = await this.query<IXCContractRecord>('cliente_contrato', {
       qtype: 'cliente_contrato.id_cliente',
       query: clientId,
@@ -121,13 +211,21 @@ export class IXCService {
       sortorder: 'desc',
     });
 
-    return res.registros;
+    const contracts = res.registros;
+    ixcCache.set(cacheKey, contracts, 60);
+    return contracts;
   }
 
   /**
-   * Busca faturas (contas a receber) em aberto do cliente
+   * Busca faturas (contas a receber) em aberto do cliente com cache em memória
    */
   async getClientInvoices(clientId: string): Promise<IXCInvoiceRecord[]> {
+    const cacheKey = `invoices:${clientId}`;
+    const cached = ixcCache.get<IXCInvoiceRecord[]>(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
     const res = await this.query<IXCInvoiceRecord>('fn_areceber', {
       qtype: 'fn_areceber.id_cliente',
       query: clientId,
@@ -139,15 +237,38 @@ export class IXCService {
     });
 
     // Filtra faturas em aberto ('A') ou todas se solicitadas
-    return res.registros.filter((inv) => inv.status === 'A' || inv.status === undefined);
+    const filtered = res.registros.filter((inv) => inv.status === 'A' || inv.status === undefined);
+    ixcCache.set(cacheKey, filtered, 60);
+    return filtered;
   }
 
   /**
    * Registra ordem de serviço / chamado técnico no IXC
    */
-  async createTicket(ticket: IXCTicketRecord): Promise<{ success: boolean; protocolo: string; id?: string }> {
+  async createTicket(ticket: IXCTicketRecord): Promise<{
+    success: boolean;
+    protocolo: string;
+    id?: string;
+    simulated?: boolean;
+    message?: string;
+  }> {
     const url = `${this.baseUrl}/su_oss_chamado`;
     const protocolo = 'DBS-' + Math.floor(100000 + Math.random() * 900000);
+
+    if (CONFIG.demoMode && !CONFIG.ixc.token) {
+      ixcCache.invalidateClient(ticket.id_cliente);
+      return {
+        success: true,
+        protocolo,
+        id: 'TKT-DEMO-' + Date.now().toString().slice(-6),
+        simulated: true,
+        message: 'Chamado simulado no adaptador de demonstração; não foi enviado ao IXC.',
+      };
+    }
+
+    if (!CONFIG.demoMode && !CONFIG.ixc.token) {
+      throw this.unavailable('su_oss_chamado', 'IXC_TOKEN não configurado');
+    }
 
     try {
       const response = await fetch(url, {
@@ -169,21 +290,32 @@ export class IXCService {
 
       if (response.ok) {
         const data: any = await response.json().catch(() => ({}));
+        const providerId = data.id ?? data.registro?.id ?? data.protocolo;
+        if (!providerId && data.success !== true) {
+          throw this.unavailable('su_oss_chamado', 'resposta sem confirmação do ERP');
+        }
+        ixcCache.invalidateClient(ticket.id_cliente);
         return {
           success: true,
           protocolo,
-          id: data.id ? String(data.id) : undefined,
+          id: providerId ? String(providerId) : undefined,
         };
       }
     } catch (e) {
       console.warn('[IXCService] Erro ao criar chamado no IXC:', e);
     }
 
-    return {
-      success: true,
-      protocolo,
-      id: 'TKT-' + Date.now().toString().slice(-6),
-    };
+    ixcCache.invalidateClient(ticket.id_cliente);
+    if (CONFIG.demoMode) {
+      return {
+        success: true,
+        protocolo,
+        id: 'TKT-DEMO-' + Date.now().toString().slice(-6),
+        simulated: true,
+        message: 'Chamado simulado no adaptador de demonstração; não foi enviado ao IXC.',
+      };
+    }
+    throw this.unavailable('su_oss_chamado');
   }
 
   /**
@@ -209,10 +341,11 @@ export class IXCService {
   async unblockPromise(clientId: string, contractId?: string): Promise<{
     success: boolean;
     message: string;
-    protocolo: string;
-    unblockUntil: string;
-    unblockHours: number;
+    protocolo?: string;
+    unblockUntil?: string;
+    unblockHours?: number;
     contractId?: string;
+    simulated?: boolean;
   }> {
     const protocolo = 'DBS-DESB-' + Math.floor(100000 + Math.random() * 900000);
     const unblockHours = 72;
@@ -224,6 +357,23 @@ export class IXCService {
       hour: '2-digit',
       minute: '2-digit',
     });
+
+    if (CONFIG.demoMode && !CONFIG.ixc.token) {
+      ixcCache.invalidateClient(clientId);
+      return {
+        success: true,
+        message: 'SIMULAÇÃO: o IXC não foi alterado. Em produção, a liberação só será confirmada após resposta do ERP.',
+        protocolo,
+        unblockUntil: unblockUntilFormatted,
+        unblockHours,
+        contractId,
+        simulated: true,
+      };
+    }
+
+    if (!CONFIG.demoMode && !CONFIG.ixc.token) {
+      throw this.unavailable('liberacao_temporaria', 'IXC_TOKEN não configurado');
+    }
 
     try {
       const url = `${this.baseUrl}/liberacao_temporaria`;
@@ -243,6 +393,14 @@ export class IXCService {
       });
 
       if (response.ok) {
+        const data: any = await response.json().catch(() => ({}));
+        if (data?.success === false || (data && data.status === 'error')) {
+          throw this.unavailable('liberacao_temporaria', 'ERP recusou a liberação');
+        }
+        if (!data || Object.keys(data).length === 0) {
+          throw this.unavailable('liberacao_temporaria', 'resposta sem confirmação do ERP');
+        }
+        ixcCache.invalidateClient(clientId);
         return {
           success: true,
           message: `Sinal desbloqueado em confiança com sucesso! Sua conexão permanecerá liberada por ${unblockHours} horas até ${unblockUntilFormatted}.`,
@@ -256,14 +414,19 @@ export class IXCService {
       console.warn('[IXCService] Erro ao comunicar liberação temporária no IXC:', e?.message || e);
     }
 
-    return {
-      success: true,
-      message: `Sinal desbloqueado em confiança com sucesso! Sua conexão permanecerá liberada por ${unblockHours} horas até ${unblockUntilFormatted}.`,
-      protocolo,
-      unblockUntil: unblockUntilFormatted,
-      unblockHours,
-      contractId,
-    };
+    ixcCache.invalidateClient(clientId);
+    if (CONFIG.demoMode) {
+      return {
+        success: true,
+        message: `SIMULAÇÃO: o IXC não foi alterado. Em produção, a liberação só será confirmada após resposta do ERP.`,
+        protocolo,
+        unblockUntil: unblockUntilFormatted,
+        unblockHours,
+        contractId,
+        simulated: true,
+      };
+    }
+    throw this.unavailable('liberacao_temporaria');
   }
 
   /**
@@ -376,4 +539,3 @@ export class IXCService {
 }
 
 export const ixcService = new IXCService();
-

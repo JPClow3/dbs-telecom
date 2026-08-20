@@ -42,6 +42,7 @@ export interface IXCInvoiceRecord {
   valor_recebido?: string;
   documento?: string;
   linha_digitavel?: string;
+  pix_copia_e_cola?: string;
   tipo_recebimento?: string;
   obs?: string;
   id_contrato?: string;
@@ -131,4 +132,3 @@ export interface TrafficConsumptionSummary {
   planFranchise: string; // '100% Ilimitado (Sem Franquia)'
   dailyUsage: DailyTrafficUsage[];
 }
-

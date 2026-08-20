@@ -6,6 +6,7 @@ import {
   FlatList,
   TouchableOpacity,
   Platform,
+  Share,
   RefreshControl,
 } from 'react-native';
 import { SHADOWS, RADIUS } from '../constants/theme';
@@ -14,6 +15,7 @@ import { SkeletonPlanCard } from '../components/Skeleton';
 import { Toast, ToastType } from '../components/Toast';
 import { apiService } from '../services/api';
 import { useAppTheme } from '../context/ThemeContext';
+import { useNetworkStatus } from '../hooks/useNetworkStatus';
 import { hapticFeedback } from '../utils/haptics';
 import { DBSPlan } from '../types';
 import {
@@ -32,19 +34,25 @@ interface PlansScreenProps {
 
 export const PlansScreen: React.FC<PlansScreenProps> = ({ onSelectPlan }) => {
   const { colors, isDark } = useAppTheme();
+  const { isConnected, isInternetReachable } = useNetworkStatus();
+  const isNetworkOnline = isConnected && isInternetReachable !== false;
   const [selectedTab, setSelectedTab] = useState<'URBANO' | 'WIFI6'>('URBANO');
   const [plans, setPlans] = useState<DBSPlan[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [loadError, setLoadError] = useState(false);
   const [toastInfo, setToastInfo] = useState<{ message: string; type: ToastType } | null>(null);
   const [deviceFilter, setDeviceFilter] = useState<'ALL' | 'FEW' | 'FAMILY' | 'GAMER'>('ALL');
 
   const loadPlans = async () => {
+    setLoadError(false);
     try {
       const data = await apiService.getPlans(selectedTab);
       setPlans(data);
     } catch (e) {
       console.warn('Erro ao carregar planos:', e);
+      setPlans([]);
+      setLoadError(true);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -60,18 +68,24 @@ export const PlansScreen: React.FC<PlansScreenProps> = ({ onSelectPlan }) => {
     setToastInfo({ message, type });
   };
 
-  const handleShareReferral = () => {
+  const handleShareReferral = async () => {
     hapticFeedback.success();
     const text = 'Venha para a DBS Telecom com 100% de fibra ótica! Use meu link e ganhe instalação gratuita: https://dbstelecom.com.br/indique/emanuel2270';
     if (Platform.OS === 'web') {
       try {
-        navigator.clipboard.writeText(text);
+        if (!navigator.clipboard) throw new Error('Clipboard indisponível');
+        await navigator.clipboard.writeText(text);
         showToast('Link de indicação copiado com sucesso!');
       } catch (e) {
-        showToast('Link copiado!');
+        showToast('Não foi possível copiar automaticamente. Selecione o link e tente novamente.', 'WARNING');
       }
     } else {
-      showToast('Link de indicação copiado!');
+      try {
+        await Share.share({ message: text });
+        showToast('Link de indicação pronto para compartilhar!');
+      } catch (e) {
+        showToast('Não foi possível abrir o compartilhamento.', 'WARNING');
+      }
     }
   };
 
@@ -113,6 +127,27 @@ export const PlansScreen: React.FC<PlansScreenProps> = ({ onSelectPlan }) => {
         </Text>
       </View>
 
+      {(loadError || !isNetworkOnline) && (
+        <View
+          style={[styles.statusNotice, { backgroundColor: colors.warningLight, borderColor: colors.warningBorder }]}
+          accessibilityLiveRegion="polite"
+        >
+          <Text style={[styles.statusNoticeText, { color: colors.warningDark }]}>
+            {loadError
+              ? 'Não foi possível carregar o catálogo oficial.'
+              : 'Você está offline. Estes planos são apenas uma prévia local.'}
+          </Text>
+          <TouchableOpacity
+            style={[styles.retryButton, { borderColor: colors.warningDark }]}
+            onPress={loadPlans}
+            accessibilityRole="button"
+            accessibilityLabel="Tentar carregar planos novamente"
+          >
+            <Text style={[styles.retryButtonText, { color: colors.warningDark }]}>Tentar novamente</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
       {/* Simulador Rápido por Perfil de Uso */}
       <View
         style={[
@@ -141,6 +176,8 @@ export const PlansScreen: React.FC<PlansScreenProps> = ({ onSelectPlan }) => {
             ]}
             onPress={() => handleSelectDevice('FEW')}
             activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel="Filtrar planos para uma a três aparelhos"
           >
             <Smartphone
               size={14}
@@ -174,6 +211,8 @@ export const PlansScreen: React.FC<PlansScreenProps> = ({ onSelectPlan }) => {
             ]}
             onPress={() => handleSelectDevice('FAMILY')}
             activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel="Filtrar planos para família"
           >
             <Users
               size={14}
@@ -207,6 +246,8 @@ export const PlansScreen: React.FC<PlansScreenProps> = ({ onSelectPlan }) => {
             ]}
             onPress={() => handleSelectDevice('GAMER')}
             activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel="Filtrar planos para gamer ou oito aparelhos ou mais"
           >
             <Gamepad2
               size={14}
@@ -274,6 +315,8 @@ export const PlansScreen: React.FC<PlansScreenProps> = ({ onSelectPlan }) => {
           ]}
           onPress={() => handleTabChange('URBANO')}
           activeOpacity={0.8}
+          accessibilityRole="tab"
+          accessibilityState={{ selected: selectedTab === 'URBANO' }}
         >
           <Globe
             size={15}
@@ -298,6 +341,8 @@ export const PlansScreen: React.FC<PlansScreenProps> = ({ onSelectPlan }) => {
           ]}
           onPress={() => handleTabChange('WIFI6')}
           activeOpacity={0.8}
+          accessibilityRole="tab"
+          accessibilityState={{ selected: selectedTab === 'WIFI6' }}
         >
           <Wifi
             size={15}
@@ -360,6 +405,32 @@ export const PlansScreen: React.FC<PlansScreenProps> = ({ onSelectPlan }) => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+  },
+  statusNotice: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginHorizontal: 16,
+    marginTop: 8,
+    padding: 10,
+    borderWidth: 1,
+    borderRadius: RADIUS.md,
+  },
+  statusNoticeText: {
+    flex: 1,
+    fontSize: 11,
+    lineHeight: 15,
+    fontWeight: '700',
+  },
+  retryButton: {
+    borderWidth: 1,
+    borderRadius: RADIUS.full,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+  },
+  retryButtonText: {
+    fontSize: 10.5,
+    fontWeight: '800',
   },
   headerBox: {
     paddingHorizontal: 20,

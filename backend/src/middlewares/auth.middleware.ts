@@ -24,17 +24,25 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction) 
     });
   }
 
-  const token = authHeader.split(' ')[1];
+  const token = authHeader.slice('Bearer '.length).trim();
+  if (!token) {
+    return res.status(401).json({
+      error: 'Não autorizado: Token JWT não fornecido.',
+      code: 'TOKEN_MISSING',
+    });
+  }
 
   try {
     const user = jwtService.verifyToken(token);
+    if (!user.clientId || (user.role && user.role !== 'admin' && user.role !== 'client')) {
+      throw new Error('invalid claims');
+    }
     req.user = user;
     return next();
-  } catch (err: any) {
+  } catch {
     return res.status(401).json({
       error: 'Não autorizado: Token JWT inválido, expirado ou corrompido.',
       code: 'TOKEN_INVALID',
-      details: err.message,
     });
   }
 }
@@ -42,19 +50,39 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction) 
 /**
  * Middleware opcional de autenticação: se o token existir, decodifica o usuário
  */
-export function optionalAuthMiddleware(req: Request, _res: Response, next: NextFunction) {
+export function optionalAuthMiddleware(req: Request, res: Response, next: NextFunction) {
   const authHeader = req.headers.authorization;
 
   if (authHeader && authHeader.startsWith('Bearer ')) {
-    const token = authHeader.split(' ')[1];
+    const token = authHeader.slice('Bearer '.length).trim();
+    if (!token) {
+      return res.status(401).json({ error: 'Token JWT não fornecido.', code: 'TOKEN_MISSING' });
+    }
     try {
       const user = jwtService.verifyToken(token);
+      if (!user.clientId || (user.role && user.role !== 'admin' && user.role !== 'client')) {
+        throw new Error('invalid claims');
+      }
       req.user = user;
     } catch {
-      // Ignora erro se for opcional
+      return res.status(401).json({
+        error: 'Token JWT inválido, expirado ou corrompido.',
+        code: 'TOKEN_INVALID',
+      });
     }
   }
 
+  return next();
+}
+
+/** Garante que apenas uma identidade administrativa assine operações de suporte. */
+export function requireAdmin(req: Request, res: Response, next: NextFunction) {
+  if (!req.user) {
+    return res.status(401).json({ error: 'Não autorizado: Usuário não autenticado.', code: 'UNAUTHORIZED' });
+  }
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Acesso restrito a administradores.', code: 'ADMIN_REQUIRED' });
+  }
   return next();
 }
 

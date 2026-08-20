@@ -18,16 +18,29 @@ import {
 
 interface InvoiceCardProps {
   invoice: FormattedInvoice;
+  /** Local/demo cards must never look like payment confirmation. */
+  isDemo?: boolean;
   onCopy?: (text: string, label: string) => void;
+  onFeedback?: (message: string, type: 'SUCCESS' | 'WARNING') => void;
   onUnblockPromise?: (invoice: FormattedInvoice) => void;
 }
 
-export const InvoiceCard: React.FC<InvoiceCardProps> = ({ invoice, onCopy, onUnblockPromise }) => {
+export const InvoiceCard: React.FC<InvoiceCardProps> = ({
+  invoice,
+  isDemo = false,
+  onCopy,
+  onFeedback,
+  onUnblockPromise,
+}) => {
   const { colors, isDark } = useAppTheme();
   const [copiedType, setCopiedType] = useState<'BARCODE' | 'PIX' | null>(null);
   const [downloadingPdf, setDownloadingPdf] = useState(false);
 
   const handleCopy = (text: string, type: 'BARCODE' | 'PIX') => {
+    if (isDemo) {
+      onFeedback?.('Prévia local: código não disponível para pagamento.', 'WARNING');
+      return;
+    }
     hapticFeedback.success();
     if (onCopy) {
       onCopy(text, type === 'BARCODE' ? 'Código de Barras' : 'Chave PIX');
@@ -37,15 +50,21 @@ export const InvoiceCard: React.FC<InvoiceCardProps> = ({ invoice, onCopy, onUnb
   };
 
   const handleDownloadPdf = async () => {
+    if (isDemo) {
+      onFeedback?.('Prévia local: boleto PDF não disponível.', 'WARNING');
+      return;
+    }
     hapticFeedback.medium();
     setDownloadingPdf(true);
     try {
-      await apiService.downloadInvoicePdf(invoice.id);
-      if (onCopy) {
-        onCopy(invoice.id, 'Download do PDF do boleto iniciado');
-      }
+      const res = await apiService.downloadInvoicePdf(invoice.id, undefined, invoice);
+      onFeedback?.(
+        res.message || (res.success ? 'Boleto PDF pronto!' : 'Não foi possível abrir o boleto.'),
+        res.success ? 'SUCCESS' : 'WARNING'
+      );
     } catch (e) {
       console.warn('Erro ao baixar PDF:', e);
+      onFeedback?.('Erro ao processar boleto em PDF.', 'WARNING');
     } finally {
       setTimeout(() => setDownloadingPdf(false), 1200);
     }
@@ -162,6 +181,16 @@ export const InvoiceCard: React.FC<InvoiceCardProps> = ({ invoice, onCopy, onUnb
         </View>
       </View>
 
+      {isDemo && (
+        <View
+          style={[styles.demoNotice, { backgroundColor: colors.warningLight, borderColor: colors.warningBorder }]}
+          accessibilityLiveRegion="polite"
+        >
+          <AlertCircle size={14} color={colors.warningDark} strokeWidth={2.3} />
+          <Text style={[styles.demoNoticeText, { color: colors.warningDark }]}>Prévia local: confirme a fatura no servidor antes de pagar.</Text>
+        </View>
+      )}
+
       {/* Se não estiver pago, exibe a Linha Digitável e Ações */}
       {!isPaid ? (
         <>
@@ -211,9 +240,13 @@ export const InvoiceCard: React.FC<InvoiceCardProps> = ({ invoice, onCopy, onUnb
                   backgroundColor: colors.success,
                   borderColor: colors.successDark,
                 },
+                isDemo && { opacity: 0.55 },
               ]}
               onPress={() => handleCopy(invoice.linhaDigitavel, 'BARCODE')}
+              disabled={isDemo}
               activeOpacity={0.75}
+              accessibilityRole="button"
+              accessibilityLabel={isDemo ? 'Código indisponível na prévia local' : 'Copiar código de barras'}
             >
               {copiedType === 'BARCODE' ? (
                 <>
@@ -239,9 +272,13 @@ export const InvoiceCard: React.FC<InvoiceCardProps> = ({ invoice, onCopy, onUnb
                   backgroundColor: colors.success,
                   borderColor: colors.successDark,
                 },
+                isDemo && { opacity: 0.55 },
               ]}
               onPress={() => handleCopy(invoice.pixCopiaECola, 'PIX')}
+              disabled={isDemo}
               activeOpacity={0.75}
+              accessibilityRole="button"
+              accessibilityLabel={isDemo ? 'PIX indisponível na prévia local' : 'Pagar com PIX'}
             >
               {copiedType === 'PIX' ? (
                 <>
@@ -265,10 +302,13 @@ export const InvoiceCard: React.FC<InvoiceCardProps> = ({ invoice, onCopy, onUnb
                 backgroundColor: colors.primaryLight,
                 borderColor: colors.primaryBorder,
               },
+              isDemo && { opacity: 0.55 },
             ]}
             onPress={handleDownloadPdf}
-            disabled={downloadingPdf}
+            disabled={downloadingPdf || isDemo}
             activeOpacity={0.8}
+            accessibilityRole="button"
+            accessibilityLabel={isDemo ? 'Boleto PDF indisponível na prévia local' : 'Visualizar ou baixar boleto em PDF'}
           >
             <FileText size={14} color={isDark ? '#FFA07A' : colors.primaryDark} strokeWidth={2.2} />
             <Text style={[styles.pdfBtnText, { color: isDark ? '#FFA07A' : colors.primaryDark }]}>
@@ -277,7 +317,7 @@ export const InvoiceCard: React.FC<InvoiceCardProps> = ({ invoice, onCopy, onUnb
           </TouchableOpacity>
 
           {/* Alerta de Desbloqueio em Confiança quando Vencido */}
-          {isOverdue && onUnblockPromise && (
+          {isOverdue && onUnblockPromise && !isDemo && (
             <TouchableOpacity
               style={[
                 styles.unblockBanner,
@@ -333,6 +373,21 @@ const styles = StyleSheet.create({
     marginVertical: 6,
     borderWidth: 1,
     ...SHADOWS.md,
+  },
+  demoNotice: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 7,
+    borderWidth: 1,
+    borderRadius: RADIUS.sm,
+    padding: 9,
+    marginBottom: 10,
+  },
+  demoNoticeText: {
+    flex: 1,
+    fontSize: 11,
+    lineHeight: 15,
+    fontWeight: '700',
   },
   header: {
     flexDirection: 'row',

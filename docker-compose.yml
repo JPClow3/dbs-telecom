@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   backend:
     build:
@@ -10,12 +8,16 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - PORT=3000
-      - NODE_ENV=production
-      - CORS_ORIGIN=*
-      - IXC_BASE_URL=https://demo.ixcsoft.com.br/webservice/v1
-      - IXC_TOKEN=replace-with-a-rotated-ixc-token
-      - AI_PROVIDER=hybrid
+      PORT: "3000"
+      NODE_ENV: production
+      CORS_ORIGIN: ${CORS_ORIGIN:?Set CORS_ORIGIN to the allowed production origins}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET to a strong production secret}
+      IXC_BASE_URL: ${IXC_BASE_URL:?Set IXC_BASE_URL to the production IXC API URL}
+      IXC_TOKEN: ${IXC_TOKEN:?Set IXC_TOKEN to the rotated production credential}
+      PIX_WEBHOOK_SECRET: ${PIX_WEBHOOK_SECRET:?Set PIX_WEBHOOK_SECRET to a strong production secret}
+      DBS_DEMO_MODE: "false"
+      AI_PROVIDER: ${AI_PROVIDER:-hybrid}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/api/health"]
       interval: 15s

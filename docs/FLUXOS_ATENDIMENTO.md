@@ -1,5 +1,7 @@
 # 💬 Fluxos de Atendimento — DBS Telecom Mobile & Chat IA
 
+> Os exemplos de mensagens deste documento são roteiros ilustrativos. Em modo offline, demonstração ou quando um provedor estiver indisponível, a interface deve exibir uma prévia claramente marcada e nunca afirmar que pagamento, contratação, desbloqueio ou chamado foi concluído.
+
 Este documento descreve detalhadamente o comportamento, as árvores de decisão, as regras de negócio, os roteiros de diálogo e os diagramas de interação aplicados no **Chat Inteligente da DBS Telecom**.
 
 ---

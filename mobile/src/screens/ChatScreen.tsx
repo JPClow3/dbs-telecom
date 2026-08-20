@@ -21,6 +21,7 @@ import { QueueCard } from '../components/QueueCard';
 import { AudioRecorder } from '../components/AudioRecorder';
 import { apiService } from '../services/api';
 import { useAppTheme } from '../context/ThemeContext';
+import { useNetworkStatus } from '../hooks/useNetworkStatus';
 import { hapticFeedback } from '../utils/haptics';
 import { ChatMessage, Customer, DepartmentType, DBSPlan } from '../types';
 import {
@@ -46,6 +47,25 @@ interface ChatScreenProps {
   onClearSelectedPlan?: () => void;
 }
 
+type ProviderState = 'unknown' | 'live' | 'local';
+
+function responseProviderState(message?: ChatMessage | null): ProviderState {
+  if (!message) return 'unknown';
+  const metadata = `${message.aiModel || ''} ${message.aiProvider || ''}`.toLowerCase();
+  if (/(offline|local|fallback|heuristic|mock|demo|demonstra)/i.test(metadata)) return 'local';
+  if (metadata.trim()) return 'live';
+  return 'unknown';
+}
+
+function isLocalMessage(message: ChatMessage, forceLocal = false): boolean {
+  return forceLocal || responseProviderState(message) === 'local';
+}
+
+function displayMessageText(message: ChatMessage, forceLocal = false): string {
+  if (!isLocalMessage(message, forceLocal) || message.sender === 'USER') return message.text;
+  return `⚠️ **PRÉVIA LOCAL — NÃO CONFIRMADO**\n\n${message.text}`;
+}
+
 export const ChatScreen: React.FC<ChatScreenProps> = ({
   customer,
   onNavigateToPlans,
@@ -54,6 +74,9 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
   onClearSelectedPlan,
 }) => {
   const { colors, isDark } = useAppTheme();
+  const { isConnected, isInternetReachable } = useNetworkStatus();
+  const isNetworkOnline = isConnected && isInternetReachable !== false;
+  const isDemoEnvironment = Boolean(customer.isDemo);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputText, setInputText] = useState('');
   const [isTyping, setIsTyping] = useState(false);
@@ -61,6 +84,9 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
   const [currentDepartment, setCurrentDepartment] = useState<DepartmentType>('GERAL');
   const [toastInfo, setToastInfo] = useState<{ message: string; type: ToastType } | null>(null);
   const [copiedProtocol, setCopiedProtocol] = useState<string | null>(null);
+  const [providerState, setProviderState] = useState<ProviderState>(
+    isDemoEnvironment ? 'local' : 'unknown'
+  );
 
   const flatListRef = useRef<FlatList>(null);
   const sessionId = useRef(`session-${customer.id}-${Date.now()}`).current;
@@ -72,15 +98,17 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
       try {
         const greeting = await apiService.getInitialGreeting(customer.id);
         setMessages([greeting]);
+        setProviderState(isDemoEnvironment ? 'local' : responseProviderState(greeting));
         if (greeting.department) setCurrentDepartment(greeting.department);
       } catch (e) {
         console.warn('Erro ao carregar saudação:', e);
+        setProviderState(isDemoEnvironment ? 'local' : 'unknown');
       } finally {
         setIsTyping(false);
       }
     }
     loadGreeting();
-  }, [customer]);
+  }, [customer, isDemoEnvironment]);
 
   // Se o usuário selecionou um plano na aba Planos, despacha mensagem automaticamente no chat
   useEffect(() => {
@@ -143,6 +171,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
           flatListRef.current?.scrollToEnd({ animated: true });
         },
         (finalMessage) => {
+          setProviderState(isDemoEnvironment ? 'local' : responseProviderState(finalMessage));
           setMessages((prev) =>
             prev.map((msg) => (msg.id === streamingBotId ? finalMessage : msg))
           );
@@ -155,10 +184,26 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     } catch (e) {
       console.warn('Erro no streaming de mensagem:', e);
       // Fallback síncrono
-      const fallbackMsg = await apiService.sendMessage(text, sessionId, customer.id);
-      setMessages((prev) =>
-        prev.map((msg) => (msg.id === streamingBotId ? fallbackMsg : msg))
-      );
+      try {
+        const fallbackMsg = await apiService.sendMessage(text, sessionId, customer.id);
+        setProviderState(isDemoEnvironment ? 'local' : responseProviderState(fallbackMsg));
+        setMessages((prev) =>
+          prev.map((msg) => (msg.id === streamingBotId ? fallbackMsg : msg))
+        );
+      } catch (fallbackError) {
+        setProviderState(isDemoEnvironment ? 'local' : 'unknown');
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === streamingBotId
+              ? {
+                  ...msg,
+                  text: 'Não consegui conectar ao atendimento agora. Sua mensagem não foi enviada. Tente novamente quando a conexão voltar.',
+                }
+              : msg
+          )
+        );
+        showToast('Não foi possível enviar sua mensagem.', 'WARNING');
+      }
     } finally {
       setTimeout(() => {
         flatListRef.current?.scrollToEnd({ animated: true });
@@ -176,6 +221,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
 
     try {
       const result = await apiService.sendAudioMessage(audioBase64, mimeType, sessionId, customer.id);
+      setProviderState(isDemoEnvironment ? 'local' : responseProviderState(result.botMessage));
       setMessages((prev) => [...prev, result.userMessage, result.botMessage]);
       if (result.botMessage.department) {
         setCurrentDepartment(result.botMessage.department);
@@ -291,13 +337,22 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
           )}
 
           {/* Renderizador Rico de Texto Formatado (se não for áudio puro) */}
-          {!isAudioMsg && <FormattedText text={item.text} isUser={isUser} />}
+          {!isAudioMsg && (
+            <FormattedText text={displayMessageText(item, isDemoEnvironment)} isUser={isUser} />
+          )}
 
           {/* Cards de Faturas */}
           {item.cards?.type === 'INVOICE' && item.cards.invoices && (
             <View style={styles.cardContainer}>
               {item.cards.invoices.map((inv) => (
-                <InvoiceCard key={inv.id} invoice={inv} onCopy={handleCopy} />
+                <InvoiceCard
+                  key={inv.id}
+                  invoice={inv}
+                  isDemo={isLocalMessage(item, isDemoEnvironment)}
+                  onCopy={handleCopy}
+                  onFeedback={showToast}
+                  onUnblockPromise={() => handleSend('Quero solicitar o desbloqueio em confiança')}
+                />
               ))}
             </View>
           )}
@@ -325,12 +380,14 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
               <View style={styles.ticketHeader}>
                 <ShieldCheck size={18} color={colors.infoDark} strokeWidth={2.2} />
                 <Text style={[styles.ticketTitle, { color: colors.infoDark }]}>
-                  Ordem de Serviço Aberta
+                  {isLocalMessage(item, isDemoEnvironment)
+                    ? 'Prévia de chamado (não registrada)'
+                    : 'Ordem de Serviço Aberta'}
                 </Text>
               </View>
               <View style={styles.protocolRow}>
                 <Text style={[styles.protocolLabel, { color: colors.textSecondary }]}>
-                  Protocolo Oficial:
+                  {isDemoEnvironment ? 'Protocolo ilustrativo:' : 'Protocolo Oficial:'}
                 </Text>
                 <Text style={[styles.protocolCode, { color: colors.primary }]}>
                   {item.cards.ticketProtocol}
@@ -354,7 +411,9 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
                 </TouchableOpacity>
               </View>
               <Text style={[styles.ticketDesc, { color: colors.textMuted }]}>
-                Seu chamado foi encaminhado para a equipe de suporte avançado com prioridade alta.
+                {isLocalMessage(item, isDemoEnvironment)
+                  ? 'Este protocolo é apenas uma demonstração local. Nenhum chamado foi enviado ao IXC.'
+                  : 'Seu chamado foi encaminhado para a equipe de suporte avançado com prioridade alta.'}
               </Text>
             </View>
           )}
@@ -374,6 +433,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
             <QueueCard
               queue={item.cards.queue}
               clientId={customer.id}
+              isDemo={isLocalMessage(item, isDemoEnvironment)}
               onCancelQueue={() => showToast('Você saiu da fila de atendimento.', 'INFO')}
               onAdvanceQueue={(updated) => {
                 if (updated.status === 'ASSIGNED') {
@@ -425,6 +485,48 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
       {/* Indicador Discreto de Setor / Canal */}
       <DepartmentBadge department={currentDepartment} />
 
+      <View
+        style={[
+          styles.providerStatus,
+          {
+            backgroundColor:
+              providerState === 'local' ? colors.warningLight : colors.cardSubdued,
+            borderColor: providerState === 'local' ? colors.warningBorder : colors.border,
+          },
+        ]}
+        accessibilityLiveRegion="polite"
+      >
+        <View
+          style={[
+            styles.providerDot,
+            {
+              backgroundColor:
+                providerState === 'local'
+                  ? colors.warningDark
+                  : providerState === 'live'
+                  ? colors.success
+                  : colors.textSubtle,
+            },
+          ]}
+        />
+        <Text
+          style={[
+            styles.providerText,
+            {
+              color: providerState === 'local' ? colors.warningDark : colors.textMuted,
+            },
+          ]}
+        >
+          {providerState === 'local'
+            ? 'Modo demonstração local: pagamentos, contratos e chamados não são confirmados.'
+            : providerState === 'live'
+            ? 'Atendimento conectado ao servidor.'
+            : isNetworkOnline
+            ? 'Conectando ao atendimento…'
+            : 'Sem internet: sua mensagem não será enviada.'}
+        </Text>
+      </View>
+
       {/* Lista de Mensagens */}
       <FlatList
         ref={flatListRef}
@@ -466,6 +568,8 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
                   handleSend(item);
                 }}
                 activeOpacity={0.7}
+                accessibilityRole="button"
+                accessibilityLabel={`Sugestão: ${item}`}
               >
                 {getChipIcon(item)}
                 <Text
@@ -507,6 +611,9 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
               setIsRecordingAudio(true);
             }}
             activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel="Gravar mensagem de voz"
+            accessibilityHint="Pressione para gravar uma solicitação"
           >
             <Mic size={18} color={colors.primary} strokeWidth={2.5} />
           </TouchableOpacity>
@@ -526,6 +633,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
             onChangeText={setInputText}
             onSubmitEditing={() => handleSend()}
             returnKeyType="send"
+            accessibilityLabel="Mensagem para o atendimento"
           />
 
           <TouchableOpacity
@@ -537,6 +645,9 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
             onPress={() => handleSend()}
             disabled={!inputText.trim()}
             activeOpacity={0.85}
+            testID="send-message-btn"
+            accessibilityRole="button"
+            accessibilityLabel="Enviar mensagem"
           >
             <Send size={16} color="#FFFFFF" strokeWidth={2.5} />
           </TouchableOpacity>
@@ -549,6 +660,28 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+  },
+  providerStatus: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    marginHorizontal: 16,
+    marginTop: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderWidth: 1,
+    borderRadius: RADIUS.sm,
+  },
+  providerDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+  },
+  providerText: {
+    flex: 1,
+    fontSize: 10.5,
+    lineHeight: 14,
+    fontWeight: '600',
   },
   listContent: {
     paddingHorizontal: 16,
