@@ -1,0 +1,35 @@
+{
+  "expo": {
+    "name": "DBS Telecom",
+    "slug": "dbs-telecom",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/logo.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/logo.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#FFFFFF"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.dbstelecom.app"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/logo.png",
+        "backgroundColor": "#FFFFFF"
+      },
+      "package": "com.dbstelecom.app"
+    },
+    "web": {
+      "favicon": "./assets/logo.png"
+    },
+    "plugins": [],
+    "extra": {
+      "eas": {
+        "projectId": "dd7e3858-ea73-465c-87c7-dc30873d494d"
+      }
+    }
+  }
+}
