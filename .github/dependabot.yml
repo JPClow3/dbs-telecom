@@ -1,0 +1,25 @@
+version: 2
+updates:
+  # Backend npm dependencies
+  - package-ecosystem: npm
+    directory: /backend
+    schedule:
+      interval: weekly
+
+  # Mobile (Expo) npm dependencies
+  - package-ecosystem: npm
+    directory: /mobile
+    schedule:
+      interval: weekly
+
+  # Playwright E2E npm dependencies
+  - package-ecosystem: npm
+    directory: /e2e
+    schedule:
+      interval: weekly
+
+  # GitHub Actions used in workflows
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

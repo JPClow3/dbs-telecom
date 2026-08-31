@@ -1,0 +1,149 @@
+name: CI
+
+# Secret scanning:
+# GitHub-native secret scanning + push protection are repository settings
+# (Settings -> Code security -> Secret scanning). They cannot be enabled from a
+# workflow file. This pipeline additionally runs gitleaks on every push/PR via
+# gitleaks/gitleaks-action@v2, which requires no extra secrets: it authenticates
+# with the default GITHUB_TOKEN provided to every job.
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gitleaks:
+    name: Secret scanning (gitleaks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history so gitleaks can scan past commits
+      - name: Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  backend:
+    name: Backend (Node 22)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: backend
+        run: npm ci
+
+      - name: Build
+        working-directory: backend
+        run: npm run build
+
+      - name: Test
+        working-directory: backend
+        run: npm test
+
+      # Build-only proof that the image compiles (patch-package postinstall now
+      # works because patch-package lives in dependencies). No push.
+      - name: Docker image build
+        run: docker build -f backend/Dockerfile -t dbs-telecom-backend:ci ./backend
+
+  mobile:
+    name: Mobile (Node 20)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+
+      - name: Install dependencies
+        working-directory: mobile
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: mobile
+        run: npm run typecheck
+
+      - name: Test
+        working-directory: mobile
+        run: npm test
+
+  e2e:
+    name: E2E (Playwright, demo fixtures mode)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Single Node version for the whole job: the Playwright webServer
+      # (scripts/serve-current-mobile.mjs) boots BOTH the backend (engines
+      # node >=22) and an Expo export of the mobile app (node >=20).
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # The e2e webServer serves the freshly exported mobile bundle behind the
+      # backend server, so both workspaces need their dependencies installed.
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci
+
+      - name: Install mobile dependencies
+        working-directory: mobile
+        run: npm ci
+
+      - name: Install e2e dependencies
+        working-directory: e2e
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        working-directory: e2e
+        run: npx playwright install chromium --with-deps
+
+      # Safety guard: serve-current-mobile.mjs forwards the process environment
+      # into the backend. Without DATABASE_URL the server falls back to SQLite
+      # in-memory demo/fixtures mode (AI_PROVIDER=mock, DBS_DEMO_MODE=true, API
+      # keys blanked by the script), which needs no secrets. If a DATABASE_URL
+      # IS configured in the repo we skip rather than risk touching live data.
+      - name: Guard - skip when a live database is configured
+        id: guard
+        run: |
+          if [ -n "${{ secrets.DATABASE_URL }}" ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::DATABASE_URL is configured; skipping browser E2E to avoid touching a live database."
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "No DATABASE_URL configured - safe to run against demo fixtures."
+          fi
+
+      - name: Run Playwright (demo fixtures mode)
+        if: steps.guard.outputs.run == 'true'
+        working-directory: e2e
+        env:
+          CI: true
+        run: npm test

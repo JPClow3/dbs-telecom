@@ -1,0 +1,38 @@
+{
+  "cli": {
+    "version": ">= 10.0.0",
+    "appVersionSource": "remote"
+  },
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal"
+    },
+    "preview": {
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://dbs-telecom-api.joaopaulo-grv4.workers.dev/api"
+      },
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      }
+    },
+    "simulator": {
+      "distribution": "internal",
+      "ios": {
+        "simulator": true
+      }
+    },
+    "production": {
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://dbs-telecom-api.joaopaulo-grv4.workers.dev/api"
+      },
+      "android": {
+        "buildType": "app-bundle"
+      }
+    }
+  },
+  "submit": {
+    "production": {}
+  }
+}
