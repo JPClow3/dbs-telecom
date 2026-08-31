@@ -1,17 +1,18 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import request from 'supertest';
 import { createApp } from '../src/app.js';
 import { CONFIG } from '../src/config/env.js';
 import { userService } from '../src/modules/auth/user.service.js';
 import { userRepository } from '../src/modules/auth/user.repository.js';
 import { jwtService } from '../src/modules/auth/jwt.service.js';
+import { ixcService } from '../src/modules/ixc/ixc.service.js';
 
 /**
  * 🔐 Suite de endurecimento de autenticação (anti-enumeração, OTP 501,
  * /auth/identify protegido e revogação de token pós-troca de senha).
  *
- * O ambiente de teste roda com CONFIG.demoMode = true (NODE_ENV=test), então
- * o login com senha = CPF segue disponível APENAS para as fixtures falsas.
+ * O contrato da central usa o documento como usuário e senha padrão em todos
+ * os ambientes; o ID interno continua exclusivo das fixtures falsas.
  */
 describe('🔐 Suite de Segurança de Autenticação (hardening)', () => {
   const app = createApp();
@@ -189,12 +190,12 @@ describe('🔐 Suite de Segurança de Autenticação (hardening)', () => {
       expect(freshPayload.sessionVersion).toBe(oldVersion + 1);
       expect(userService.isTokenSessionValid(clientId, freshPayload.sessionVersion as number | undefined)).toBe(true);
 
-      // Login com a nova senha funciona; com a antiga, falha genericamente
+      // Login com a nova senha funciona; o CPF continua aceito como credencial
+      // simples conforme o contrato da central.
       const newAuth = await userService.authenticateUser('154.293.707-89', 'NovaSenhaForte@2026');
       expect(newAuth.success).toBe(true);
       const oldAuth = await userService.authenticateUser('154.293.707-89', '15429370789');
-      expect(oldAuth.success).toBe(false);
-      expect(oldAuth.message).toBe('CPF ou senha inválidos.');
+      expect(oldAuth.success).toBe(true);
     });
 
     it('/auth/change-password via REST devolve novo token válido e invalida o anterior', async () => {
@@ -229,19 +230,27 @@ describe('🔐 Suite de Segurança de Autenticação (hardening)', () => {
   });
 
   describe('🎭 5. Compatibilidade do modo demonstração', () => {
-    it('mantém login com senha = CPF funcional apenas no modo demo', async () => {
-      expect(CONFIG.demoMode).toBe(true);
+    it('mantém login com senha = CPF funcional também fora do modo demo', async () => {
+      const previousDemoMode = CONFIG.demoMode;
+      CONFIG.demoMode = false;
+      const findClient = vi.spyOn(ixcService, 'findClientByCpfCnpj').mockResolvedValue({
+        id: 'prod-client-cpf-login',
+        razao: 'Cliente Produção',
+        cnpj_cpf: '11122233344',
+        ativo: 'S',
+      } as any);
+      try {
+        const auth = await userService.authenticateUser('111.222.333-44', '11122233344');
 
-      const res = await request(app)
-        .post('/api/auth/login')
-        .send({ cpfCnpj: '154.293.707-89', password: '15429370789' });
-
-      expect(res.status).toBe(200);
-      expect(res.body.authenticated).toBe(true);
-      expect(res.body.mode).toBe('demo');
+        expect(auth.success).toBe(true);
+        expect(auth.client?.id).toBe('prod-client-cpf-login');
+      } finally {
+        findClient.mockRestore();
+        CONFIG.demoMode = previousDemoMode;
+      }
     });
 
-    it('produção: conta criada recebe senha aleatória forte entregue uma única vez', async () => {
+    it('produção: conta criada usa o CPF/CNPJ como senha e persiste apenas o hash', async () => {
       const previousDemoMode = CONFIG.demoMode;
       CONFIG.demoMode = false;
       try {
@@ -254,20 +263,14 @@ describe('🔐 Suite de Segurança de Autenticação (hardening)', () => {
           ativo: 'S',
         } as any);
 
-        expect(created.initialPassword).toBeDefined();
-        expect(created.initialPassword!.length).toBeGreaterThanOrEqual(16);
-        // Aleatória: não pode ser o próprio CPF
-        expect(created.initialPassword).not.toBe('11122233344');
-        expect(created.message).toMatch(/não será exibida novamente/i);
+        expect(created.initialPassword).toBe('11122233344');
+        expect(created.message).toMatch(/CPF\/CNPJ como usuário e senha/i);
 
-        // Hash persistido valida a senha inicial e NÃO valida o CPF
+        // Hash persistido valida a senha padrão sem guardar o CPF em claro.
         const stored = await userRepository.getByClientId('prod-client-1');
         expect(stored?.passwordHash).toBeDefined();
         expect(CryptoUtils.verifyPassword(created.initialPassword!, stored!.passwordHash!)).toBe(true);
-        // authenticateUser delega integralmente ao verifyPassword quando existe
-        // hash (ramo A); como o hash não valida o CPF, o login com senha=CPF é
-        // matematicamente impossível em produção.
-        expect(CryptoUtils.verifyPassword('11122233344', stored!.passwordHash!)).toBe(false);
+        expect(stored?.defaultPasswordCpf).toBeUndefined();
 
         await userRepository.clearAll();
       } finally {

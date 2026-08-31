@@ -322,7 +322,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
             <View style={styles.labelRow}>
               <Text style={[styles.inputLabel, { color: colors.textMuted }]}>SENHA DE ACESSO</Text>
               <Text style={[styles.inputHint, { color: isDark ? '#FFA07A' : colors.primaryDark }]}>
-                Padrão: CPF (sem pontos)
+                Usuário e senha: CPF/CNPJ (sem pontuação)
               </Text>
             </View>
             <View

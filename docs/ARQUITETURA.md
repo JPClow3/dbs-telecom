@@ -167,7 +167,7 @@ sequenceDiagram
     BFF->>UserSvc: authenticateUser(cpfCnpj, password)
     UserSvc->>IXC: POST /cliente (filtro cliente.cnpj_cpf)
     IXC-->>UserSvc: Retorna o registro autorizado do cliente
-    UserSvc->>UserSvc: Valida se senha informada coincide com CPF limpo ou ID
+    UserSvc->>UserSvc: Valida se usuário e senha coincidem com o CPF/CNPJ limpo
     UserSvc-->>BFF: Sucesso na autenticação
     BFF->>IXC: POST /cliente_contrato (filtro id_cliente = 2270)
     IXC-->>BFF: Retorna contratos ativos

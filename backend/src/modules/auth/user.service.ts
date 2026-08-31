@@ -3,7 +3,6 @@ import { IXCClientRecord } from '../ixc/ixc.types.js';
 import { CONFIG } from '../../config/env.js';
 import { userRepository, UserAccountRecord } from './user.repository.js';
 import { CryptoUtils } from '../../utils/crypto.utils.js';
-import crypto from 'node:crypto';
 
 export interface UserAccount {
   id: string;
@@ -32,10 +31,10 @@ export interface OtpRequestResult {
   notImplemented?: boolean;
 }
 
-/** Resultado da criação/sincronização de conta com credencial inicial de uso único. */
+/** Resultado da criação/sincronização de conta com credencial inicial. */
 export interface AccountCreationResult {
   user: UserAccount;
-  /** Senha inicial aleatória — exibida UMA única vez, nesta resposta, e nunca persistida em texto puro. */
+  /** CPF/CNPJ sem pontuação usado como senha inicial; o banco guarda apenas o hash. */
   initialPassword?: string;
   message?: string;
 }
@@ -72,9 +71,10 @@ export class UserService {
    * Autentica cliente via CPF/Login e Senha
    * Suporta:
    * 1. Senha customizada com hash criptográfico seguro (Scrypt/Salt)
-   * 2. Senha inicial aleatória entregue uma única vez na criação da conta
-   * 3. Em modo demonstração explicitamente habilitado: senha padrão = CPF/ID
-   *    (fixtures falsas — nunca aplicado fora do demo)
+   * 2. Credencial simples para o público da central: documento como senha
+   *    (CPF/CNPJ sem pontuação)
+   * 3. Em modo demonstração explicitamente habilitado: ID interno como senha
+   *    (fixtures falsas)
    */
   async authenticateUser(loginOrCpf: string, passwordInput: string): Promise<{ success: boolean; client?: IXCClientRecord; message?: string }> {
     const cleanPass = passwordInput.trim().replace(/\D/g, '');
@@ -102,12 +102,19 @@ export class UserService {
       return { success: false, message: 'CPF ou senha inválidos.' };
     }
 
-    // A. Se tiver hash criptográfico salvo, valida estritamente pelo hash (e master de demo)
+    // A. O hash continua sendo a fonte primária para senhas customizadas, mas
+    // o documento também permanece aceito como senha conforme o contrato
+    // simplificado solicitado para a central do assinante. Isso também torna
+    // recuperáveis contas criadas durante a migração anterior, cujo hash
+    // aleatório nunca chegou a ser entregue ao cliente.
     if (existingUser.passwordHash) {
       const isPasswordValid = CryptoUtils.verifyPassword(passwordInput, existingUser.passwordHash);
+      const isDocumentPasswordValid = cleanPass.length > 0 &&
+        clientCpfClean.length > 0 &&
+        cleanPass === clientCpfClean;
       const isMasterDemoMatch = this.isMasterDemoPassword(passwordInput);
 
-      if (isPasswordValid || isMasterDemoMatch) {
+      if (isPasswordValid || isDocumentPasswordValid || isMasterDemoMatch) {
         return { success: true, client };
       }
 
@@ -117,18 +124,18 @@ export class UserService {
       };
     }
 
-    // B. Sem hash persistido: só o modo demonstração aceita senha padrão
-    //    (CPF ou ID interno). Em produção a conta é criada com senha inicial
-    //    aleatória entregue uma única vez, então este ramo nunca roda fora do demo.
-    const isCpfMatch = CONFIG.demoMode &&
-      ((cleanPass.length > 0 && clientCpfClean.length > 0 && cleanPass === clientCpfClean) ||
-        Boolean(client.cnpj_cpf?.trim() && passwordInput.trim() === client.cnpj_cpf.trim()));
+    // B. Fallback defensivo para contas legadas sem hash. O documento é a
+    // senha padrão em todos os ambientes; o ID interno continua exclusivo do
+    // modo demonstração.
+    const isDocumentPasswordValid = cleanPass.length > 0 &&
+      clientCpfClean.length > 0 &&
+      cleanPass === clientCpfClean;
     // O ID interno só é aceito como senha no modo demonstração; em produção,
     // conhecer o ID numérico não pode garantir acesso à conta.
     const isIdMatch = Boolean(CONFIG.demoMode && client.id && passwordInput.trim() === client.id);
     const isMasterDemoMatch = this.isMasterDemoPassword(passwordInput);
 
-    if (isCpfMatch || isIdMatch || isMasterDemoMatch) {
+    if (isDocumentPasswordValid || isIdMatch || isMasterDemoMatch) {
       return {
         success: true,
         client,
@@ -309,8 +316,8 @@ export class UserService {
   /**
    * Sincroniza e cria contas de acesso para clientes cadastrados no IXC no SQLite
    *
-   * Cada conta recém-criada recebe uma senha inicial aleatória que é retornada
-   * EXATAMENTE UMA VEZ nesta resposta (nunca persistida em texto puro).
+   * Cada conta recém-criada usa o CPF/CNPJ sem pontuação como senha padrão.
+   * O banco persiste somente o hash dessa credencial.
    */
   async syncUsersFromIXC(limit: number = 50): Promise<{ totalProcessed: number; users: UserAccount[]; credentials?: Array<{ clientId: string; login: string; initialPassword: string }> }> {
     const res = await ixcService.query<IXCClientRecord>('cliente', {
@@ -344,10 +351,9 @@ export class UserService {
   /**
    * Registra a conta de usuário para o cliente no SQLite.
    *
-   * Produção: gera senha inicial ALEATÓRIA, persiste apenas o hash Scrypt e
-   * retorna a senha em claro UMA ÚNICA vez nesta resposta.
-   * Demo: mantém o comportamento legado (senha padrão = CPF), sinalizado
-   * estritamente pelo flag CONFIG.demoMode — fixtures são fictícias.
+   * Todos os ambientes: usa o CPF/CNPJ sem pontuação como credencial inicial,
+   * persistindo apenas o hash Scrypt. O documento nunca é armazenado como
+   * senha em claro no banco.
    */
   async registerUserAccount(client: IXCClientRecord): Promise<AccountCreationResult> {
     const cleanCpf = (client.cnpj_cpf || '').replace(/\D/g, '');
@@ -355,18 +361,10 @@ export class UserService {
 
     const existing = await userRepository.getByClientId(client.id);
 
-    // Senha inicial: em produção é aleatória e entregue uma única vez;
-    // em modo demo preserva o comportamento legado (CPF como senha).
+    // Senha inicial simples para a central: CPF/CNPJ sem pontuação.
     let initialPassword: string | undefined;
     if (!existing?.passwordHash) {
-      if (CONFIG.demoMode) {
-        // Fixtures de demonstração são fictícias; manter compatibilidade dos
-        // fluxos de teste que fazem login com CPF como senha.
-        initialPassword = cleanCpf || client.id;
-      } else {
-        // Produção: senha forte gerada com CSPRNG, exibida uma única vez.
-        initialPassword = this.generateInitialPassword();
-      }
+      initialPassword = cleanCpf || client.id;
     }
     const passwordHash = initialPassword !== undefined
       ? CryptoUtils.hashPassword(initialPassword)
@@ -388,33 +386,17 @@ export class UserService {
       updatedAt: now,
     };
 
-    // The legacy CPF-default marker is returned only by the explicit demo
-    // adapter for compatibility with the prototype. It is never persisted as
-    // credential material in normal environments.
+    // O marcador da senha padrão é apenas compatibilidade interna e nunca é
+    // persistido como credencial em claro.
     await userRepository.upsertUser({ ...record, defaultPasswordCpf: undefined });
     return {
       user: {
         ...record,
-        defaultPasswordCpf: CONFIG.demoMode ? (cleanCpf || client.id) : undefined,
+        defaultPasswordCpf: cleanCpf || client.id,
       } as UserAccount,
       ...(initialPassword !== undefined ? { initialPassword } : {}),
-      ...(CONFIG.demoMode ? {} : {
-        message: 'Conta criada. Esta é a sua senha inicial de acesso — guarde-a em local seguro; ela não será exibida novamente.',
-      }),
+      message: 'Conta criada com CPF/CNPJ como usuário e senha padrão.',
     };
-  }
-
-  /**
-   * Gera senha inicial forte (16 caracteres, letras + dígitos + símbolos)
-   * usando CSPRNG (crypto.randomInt), sem ambiguidade visual.
-   */
-  private generateInitialPassword(): string {
-    const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%&*';
-    let password = '';
-    for (let i = 0; i < 16; i++) {
-      password += alphabet[crypto.randomInt(0, alphabet.length)];
-    }
-    return password;
   }
 
   /**

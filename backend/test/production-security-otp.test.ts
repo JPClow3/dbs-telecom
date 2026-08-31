@@ -71,9 +71,9 @@ describe('🔐 Suite de Segurança de Produção, Hash de Senhas e OTP', () => {
       const changeRes = await userService.changePassword(clientId, '15429370789', 'NovaSenha@2026');
       expect(changeRes.success).toBe(true);
 
-      // 2. Tenta logar com a senha antiga (CPF) -> deve falhar
+      // 2. O CPF continua aceito como credencial simples da central
       const oldAuth = await userService.authenticateUser('154.293.707-89', '15429370789');
-      expect(oldAuth.success).toBe(false);
+      expect(oldAuth.success).toBe(true);
 
       // 3. Tenta logar com a nova senha customizada -> deve ter sucesso
       const newAuth = await userService.authenticateUser('154.293.707-89', 'NovaSenha@2026');

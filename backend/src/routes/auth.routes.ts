@@ -48,9 +48,9 @@ export function registerAuthRoutes(apiRouter: Router): void {
       return res.status(400).json({ error: 'Informe o CPF, CNPJ ou login para autenticação.' });
     }
 
-    // A senha padrão = CPF é vetor de apropriação de conta (o CPF consta em
-    // faturas). Nunca mais assumir senha = documento quando o campo vem vazio:
-    // a credencial deve ser sempre explícita.
+    // A credencial deve ser sempre explícita no contrato HTTP. A tela mobile
+    // preenche essa credencial com o CPF/CNPJ sem pontuação para simplificar o
+    // acesso do público da central.
     const pass = password !== undefined && password !== null ? String(password) : '';
     if (!pass.trim()) {
       return res.status(400).json({ error: 'Informe a senha de acesso.' });
@@ -106,8 +106,8 @@ export function registerAuthRoutes(apiRouter: Router): void {
   });
 
   /**
-   * Sincronização em lote: cria contas de acesso para clientes do IXC com
-   * senha inicial aleatória (produção) — entregue UMA única vez na resposta.
+   * Sincronização em lote: cria contas de acesso para clientes do IXC usando
+   * CPF/CNPJ como usuário e senha padrão.
    */
   apiRouter.post('/auth/sync-users', authMiddleware, requireAdmin, async (req: Request, res: Response) => {
     const limit = parseInt(String(req.query.limit || req.body.limit || '50'), 10);
@@ -117,11 +117,11 @@ export function registerAuthRoutes(apiRouter: Router): void {
       return res.json({
         success: true,
         message: `Criados/sincronizados ${syncResult.totalProcessed} usuários da base IXC.` +
-          (credentials?.length ? ` ${credentials.length} senha(s) inicial(is) gerada(s) — exibidas apenas nesta resposta, não serão exibidas novamente.` : ''),
+          (credentials?.length ? ` ${credentials.length} credencial(is) com CPF/CNPJ como senha padrão.` : ''),
         totalProcessed: syncResult.totalProcessed,
         users: syncResult.users.map(redactUserAccount),
-        // Credenciais iniciais de uso único (produção). Nunca persistidas;
-        // em demo o login segue o comportamento legado (CPF como senha).
+        // Credenciais iniciais para o operador distribuir conforme o contrato
+        // da central. O banco persiste somente o hash.
         ...(credentials ? { credentials } : {}),
       });
     } catch (error: any) {
