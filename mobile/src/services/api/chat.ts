@@ -1,6 +1,7 @@
 import type { ChatMessage, DepartmentType } from '../../types';
 import { apiFetch, getApiUrl, getAuthHeaders, isApiServiceError, responseError, unavailableError, unavailableMessage } from './transport';
 import { isDemoMode, processOfflineMessage } from './demoAdapter';
+import * as outbox from '../../utils/outbox';
 
 export async function getInitialGreeting(clientId: string): Promise<ChatMessage> {
   if (isDemoMode()) {
@@ -37,14 +38,15 @@ export async function sendMessage(
   message: string,
   sessionId: string,
   clientId?: string,
-  clientMessageId?: string
+  clientMessageId?: string,
+  enqueueOnFailure = true,
 ): Promise<ChatMessage> {
   if (isDemoMode()) {
     return processOfflineMessage(message, clientId);
   }
 
   try {
-    const res = await fetch(`${getApiUrl()}/chat/message`, {
+    const res = await apiFetch(`${getApiUrl()}/chat/message`, {
       method: 'POST',
       headers: getAuthHeaders(),
       body: JSON.stringify({ message, sessionId, clientId, clientMessageId }),
@@ -54,6 +56,14 @@ export async function sendMessage(
     throw await responseError(res, 'Não foi possível enviar sua mensagem.');
   } catch (e) {
     console.warn('Backend BFF offline ou inacessível:', e);
+    const shouldQueue = !isApiServiceError(e) || e.kind === 'UNAVAILABLE' || e.kind === 'TIMEOUT';
+    if (enqueueOnFailure && shouldQueue) {
+      try {
+        await outbox.enqueue(sessionId, message, new Date(), { clientId, clientMessageId });
+      } catch (outboxError) {
+        console.warn('Não foi possível salvar a mensagem para reenvio:', outboxError);
+      }
+    }
     if (isApiServiceError(e) && e.kind === 'UNAUTHORIZED') {
       return unavailableMessage(
         'Sua sessão expirou. Entre novamente para continuar o atendimento.',
@@ -96,11 +106,12 @@ export async function sendMessageStream(
 
   try {
     resetIdleTimer();
-    const response = await fetch(`${getApiUrl()}/chat/message/stream`, {
+    const response = await apiFetch(`${getApiUrl()}/chat/message/stream`, {
       method: 'POST',
       headers: getAuthHeaders(),
       body: JSON.stringify({ message, sessionId, clientId, clientMessageId }),
       signal: controller.signal,
+      noTimeout: true,
     });
 
     if (!response.ok || !response.body) {
@@ -193,7 +204,7 @@ export async function sendAudioMessage(
   }
 
   try {
-    const res = await fetch(`${getApiUrl()}/chat/audio`, {
+    const res = await apiFetch(`${getApiUrl()}/chat/audio`, {
       method: 'POST',
       headers: getAuthHeaders(),
       body: JSON.stringify({ audioBase64, mimeType, sessionId, clientId }),
@@ -227,7 +238,7 @@ export async function submitCSAT(data: {
   }
 
   try {
-    const res = await fetch(`${getApiUrl()}/chat/csat`, {
+    const res = await apiFetch(`${getApiUrl()}/chat/csat`, {
       method: 'POST',
       headers: getAuthHeaders(),
       body: JSON.stringify(data),
@@ -257,7 +268,7 @@ export async function getCSATStats() {
   }
 
   try {
-    const res = await fetch(`${getApiUrl()}/chat/csat/stats`);
+    const res = await apiFetch(`${getApiUrl()}/chat/csat/stats`, { headers: getAuthHeaders() });
     if (res.ok) return await res.json();
     throw await responseError(res, 'Não foi possível carregar as avaliações.');
   } catch (e) {

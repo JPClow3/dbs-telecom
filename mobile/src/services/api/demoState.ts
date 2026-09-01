@@ -38,4 +38,13 @@ export const exitDemoMode = (): void => {
   setAuthToken(null);
 };
 
+/**
+ * Leaves the local visual demo without touching a token that was just issued
+ * by the server. This is used when a user switches from the local shortcut to
+ * the authenticated Gemini-backed preview.
+ */
+export const deactivateDemoMode = (): void => {
+  demoMode = false;
+};
+
 export const isDemoMode = (): boolean => demoMode;

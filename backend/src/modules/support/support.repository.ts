@@ -36,6 +36,20 @@ export class SupportRepository {
     await getDatabase().prepare('DELETE FROM support_diagnostics WHERE client_id = ?').run(clientId);
   }
 
+  /**
+   * Atomically claims the only side-effecting transition in the diagnostic
+   * flow. This closes the race where two requests both read STEP_3_RESTART
+   * before either one has created the IXC ticket.
+   */
+  async claimDiagnosticEscalation(clientId: string, now = Date.now()): Promise<boolean> {
+    const result = await getDatabase().prepare(`
+      UPDATE support_diagnostics
+      SET step = 'ESCALATED', updated_at = ?
+      WHERE client_id = ? AND step = 'STEP_3_RESTART'
+    `).run(now, clientId);
+    return result.changes > 0;
+  }
+
   async saveUserTicket(ticket: IXCTicketRecord): Promise<void> {
     await getDatabase().prepare(`
       INSERT INTO user_tickets (id, client_id, id_contrato, tipo, assunto, mensagem, status, status_label, prioridade, protocolo, data_abertura, nome_tecnico, previsao_visita, etapas)

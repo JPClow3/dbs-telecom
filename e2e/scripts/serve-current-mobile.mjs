@@ -96,6 +96,7 @@ const backend = spawn(runner, ['tsx', 'src/server.ts'], {
   shell: process.platform === 'win32',
   env: {
     ...isolatedEnv,
+    PORT: process.env.E2E_PORT || process.env.PORT || '3000',
     JWT_SECRET: 'e2e-throwaway-secret-not-used-in-production-0123456789abcdef',
     DATABASE_URL: '',
     DIRECT_URL: '',

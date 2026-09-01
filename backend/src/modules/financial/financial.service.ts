@@ -68,6 +68,7 @@ export interface PixPaymentRow {
   amount: string;
   paid_at: string;
   webhook_event_id: string;
+  created_at: string;
 }
 
 export class FinancialService {
@@ -92,8 +93,40 @@ export class FinancialService {
   async getInvoicesByClientId(clientId: string): Promise<FormattedInvoice[]> {
     const rawInvoices = await ixcService.getClientInvoices(clientId);
 
+    // The gateway can settle a payment before the IXC write is available.
+    // Local durable payment rows therefore override the ERP status and can
+    // also supply a minimal paid invoice when the ERP temporarily omits it.
+    const localPayments = await getDatabase().prepare(`
+      SELECT invoice_id, amount, paid_at, webhook_event_id, created_at
+      FROM pix_payments WHERE client_id = ? ORDER BY paid_at DESC
+    `).all<PixPaymentRow>(clientId);
+    const paymentByInvoice = new Map<string, PixPaymentRow>();
+    for (const payment of localPayments) {
+      if (!paymentByInvoice.has(payment.invoice_id)) paymentByInvoice.set(payment.invoice_id, payment);
+    }
+
+    const invoices = [...rawInvoices];
+    const knownInvoiceIds = new Set(invoices.map((invoice) => invoice.id));
+    for (const payment of localPayments) {
+      if (knownInvoiceIds.has(payment.invoice_id)) continue;
+      const paidDate = payment.paid_at.slice(0, 10);
+      invoices.push({
+        id: payment.invoice_id,
+        id_cliente: clientId,
+        status: 'R',
+        data_emissao: paidDate,
+        data_vencimento: paidDate,
+        valor: payment.amount,
+        valor_aberto: '0',
+        valor_recebido: payment.amount,
+        documento: payment.invoice_id,
+      });
+    }
+
     const formatted: FormattedInvoice[] = [];
-    for (const inv of rawInvoices) {
+    for (const inv of invoices) {
+      const localPayment = paymentByInvoice.get(inv.id);
+      const isPaid = Boolean(localPayment) || inv.status === 'R';
       const valorNum = parseFloat(inv.valor || inv.valor_aberto || '');
       if (!Number.isFinite(valorNum) || valorNum < 0) {
         // Uma linha corrompida do ERP não pode derrubar o extrato inteiro:
@@ -107,7 +140,7 @@ export class FinancialService {
       let isOverdue = false;
       if (parts.length === 3 && !isNaN(parts[0]) && !isNaN(parts[1]) && !isNaN(parts[2])) {
         const dueEndOfDay = new Date(parts[0], parts[1] - 1, parts[2], 23, 59, 59, 999);
-        isOverdue = dueEndOfDay.getTime() < Date.now() && inv.status === 'A';
+        isOverdue = dueEndOfDay.getTime() < Date.now() && !isPaid;
       }
 
       // A linha/Pix só pode ser exibida quando fornecida pelo ERP. The demo
@@ -124,7 +157,7 @@ export class FinancialService {
         dataEmissao: inv.data_emissao,
         dataVencimento: inv.data_vencimento,
         dataVencimentoFormatada: this.formatDate(inv.data_vencimento),
-        status: inv.status === 'R' ? 'PAGO' : isOverdue ? 'VENCIDO' : 'PENDENTE',
+        status: isPaid ? 'PAGO' : isOverdue ? 'VENCIDO' : 'PENDENTE',
         linhaDigitavel: rawLinha,
         linhaDigitavelFormatada: linhaFormatada,
         pixCopiaECola: pixPayload,
@@ -472,8 +505,9 @@ Q
     const paidAt = payload.paidAt || new Date().toISOString();
     const dedupeKey = this.resolvePixDedupeKey(payload, amount, paidAt);
 
-    // 1. Idempotência: chave já processada (persistida) => sucesso sem refazer.
-    if (!(await this.claimPixEventPersisted(dedupeKey, payload.invoiceId))) {
+    // 1. Fast in-process check only. It never claims the event: the durable
+    // transaction below is the authority and can safely be retried on error.
+    if (this.isPixEventClaimed(dedupeKey, Date.now())) {
       console.info(
         `[FinancialService] Webhook PIX duplicado ignorado (idempotente): ${dedupeKey}`
       );
@@ -487,25 +521,32 @@ Q
       };
     }
 
-    // 2. Persistência local do pagamento (fonte de verdade para "Fatura Paga!").
-    let persistedPayment: PixPaymentRecord | undefined;
+    // 2. Event dedupe and payment persistence are one transaction. If either
+    // INSERT fails, neither row exists and the gateway can retry safely.
+    let persistedPayment: PixPaymentRecord;
     try {
       const db = getDatabase();
-      await db
-        .prepare(
-          `INSERT INTO pix_payments
-             (invoice_id, client_id, txid, end_to_end_id, amount, paid_at, webhook_event_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`
-        )
-        .run(
-          payload.invoiceId,
-          payload.clientId,
-          payload.txid || null,
-          payload.endToEndId || null,
-          String(amount),
-          paidAt,
-          dedupeKey
-        );
+      await db.transaction([
+        {
+          text: 'INSERT INTO pix_webhook_events (event_id, invoice_id, processed_at) VALUES (?, ?, ?)',
+          parameters: [dedupeKey, payload.invoiceId, new Date().toISOString()],
+        },
+        {
+          text: `INSERT INTO pix_payments
+             (invoice_id, client_id, txid, end_to_end_id, amount, paid_at, webhook_event_id, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          parameters: [
+            payload.invoiceId,
+            payload.clientId,
+            payload.txid || null,
+            payload.endToEndId || null,
+            String(amount),
+            paidAt,
+            dedupeKey,
+            new Date().toISOString(),
+          ],
+        },
+      ]);
       ixcCache.invalidateClient(payload.clientId);
       persistedPayment = {
         id: dedupeKey,
@@ -515,8 +556,23 @@ Q
         paidAt,
       };
     } catch (e) {
-      console.warn('[FinancialService] Não foi possível registrar pagamento PIX:', e);
+      if (isUniqueViolation(e)) {
+        this.claimPixEvent(dedupeKey, Date.now());
+        return {
+          success: true,
+          duplicate: true,
+          invoiceId: payload.invoiceId,
+          status: 'PAGO',
+          paidAt,
+          amount,
+        };
+      }
+      const persistenceError = new Error('Não foi possível persistir o pagamento PIX; o webhook deve ser reenviado.');
+      (persistenceError as Error & { code?: string }).code = 'PIX_PERSISTENCE_FAILED';
+      (persistenceError as Error & { cause?: unknown }).cause = e;
+      throw persistenceError;
     }
+    this.claimPixEvent(dedupeKey, Date.now());
 
     // 3. Reconciliação com o ERP (IXC). Falha aqui não derruba o webhook.
     let reconciliation: PixReconciliationResult | null = null;
@@ -537,6 +593,7 @@ Q
       clientId: payload.clientId,
       amount,
       paidAt,
+      webhookEventId: dedupeKey,
       message: 'Fatura Paga com Sucesso!',
     };
 
@@ -589,6 +646,15 @@ Q
     return `fp:${fingerprint}`;
   }
 
+  /** Returns the canonical replay/idempotency key before side effects occur. */
+  getPixWebhookDedupeKey(payload: PixWebhookPayload): string {
+    const amount = Number(payload.amount);
+    if (!Number.isFinite(amount) || amount <= 0 || !payload.invoiceId || !payload.clientId) {
+      throw new Error('Payload inválido: invoiceId, clientId e amount são obrigatórios.');
+    }
+    return this.resolvePixDedupeKey(payload, amount, payload.paidAt || new Date().toISOString());
+  }
+
   /**
    * Reconciliação com o IXC Soft usando as mesmas funções do fluxo de faturas:
    * marca baixa manual da fatura (`fn_areceber`, espelhando unblockPromise) e
@@ -603,20 +669,13 @@ Q
   }): Promise<PixReconciliationResult> {
     const result: PixReconciliationResult = { attempted: true, errors: [] };
 
-    // Marca a baixa da fatura no ERP (mesmo endpoint/registro do fluxo de
-    // desbloqueio em confiança; o IXC aceita atualização parcial do registro).
+    // Marca a baixa da fatura no ERP through the explicit write operation.
     try {
-      await ixcService.query<any>('fn_areceber', {
-        qtype: 'fn_areceber.id',
-        query: input.invoiceId,
-        oper: '=',
-        page: '1',
-        rp: '1',
-        status: 'R',
-        data_recebimento: input.paidAt.slice(0, 10),
-        valor_recebido: input.amount.toFixed(2),
-      } as any);
-      result.invoiceMarkedPaid = true;
+      const update = await ixcService.updateInvoicePayment(input.invoiceId, {
+        paidAt: input.paidAt.slice(0, 10),
+        amount: input.amount.toFixed(2),
+      });
+      if (update.success && !update.simulated) result.invoiceMarkedPaid = true;
     } catch (e) {
       result.errors.push(`fn_areceber update failed: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -649,6 +708,22 @@ Q
       .get<PixPaymentRow>(invoiceId);
   }
 
+  /** Reads durable payment state so SSE can recover events handled elsewhere. */
+  async getLatestPixPaymentForClient(clientId: string, since?: string): Promise<PixPaymentRow | undefined> {
+    if (since) {
+      return await getDatabase().prepare(`
+        SELECT id, invoice_id, client_id, txid, end_to_end_id, amount, paid_at, webhook_event_id, created_at
+        FROM pix_payments
+        WHERE client_id = ? AND created_at >= ?
+        ORDER BY created_at DESC LIMIT 1
+      `).get<PixPaymentRow>(clientId, since);
+    }
+    return await getDatabase().prepare(`
+      SELECT id, invoice_id, client_id, txid, end_to_end_id, amount, paid_at, webhook_event_id, created_at
+      FROM pix_payments WHERE client_id = ? ORDER BY created_at DESC LIMIT 1
+    `).get<PixPaymentRow>(clientId);
+  }
+
   /**
    * Verifies the HMAC signature over the exact request bytes. Callers must
    * still enforce a timestamp and event-id replay window around this check.
@@ -675,6 +750,13 @@ Q
     return true;
   }
 
+  private isPixEventClaimed(eventId: string, now = Date.now()): boolean {
+    for (const [id, expiresAt] of this.processedPixEvents) {
+      if (expiresAt <= now) this.processedPixEvents.delete(id);
+    }
+    return Boolean(eventId && this.processedPixEvents.has(eventId));
+  }
+
   /**
    * Idempotência PERSISTIDA do webhook PIX.
    *
@@ -687,7 +769,7 @@ Q
    * Retorna false quando o evento já foi processado em qualquer camada.
    */
   async claimPixEventPersisted(dedupeKey: string, invoiceId?: string, now = Date.now()): Promise<boolean> {
-    if (!this.claimPixEvent(dedupeKey, now)) return false;
+    if (this.isPixEventClaimed(dedupeKey, now)) return false;
 
     try {
       // event_id guarda a chave canônica (evt:<txid> ou fp:<hash>); o
@@ -696,17 +778,12 @@ Q
       await getDatabase()
         .prepare('INSERT INTO pix_webhook_events (event_id, invoice_id, processed_at) VALUES (?, ?, ?)')
         .run(dedupeKey, invoiceId || null, new Date().toISOString());
+      this.claimPixEvent(dedupeKey, now);
       return true;
     } catch (e: any) {
       // Violação de PK/unique => evento já processado por outra execução.
-      // NOT NULL/other errors NÃO são duplicados — seguem com a camada em memória.
-      const message = String(e?.message || '');
-      const isDuplicateKey = /unique constraint|primary key must be unique|duplicate key value/i.test(message);
-      if (!isDuplicateKey) {
-        console.warn('[FinancialService] Dedupe persistido indisponível; usando memória:', message || e);
-        return true;
-      }
-      return false;
+      if (isUniqueViolation(e)) return false;
+      throw e;
     }
   }
 
@@ -727,3 +804,10 @@ Q
 }
 
 export const financialService = new FinancialService();
+
+function isUniqueViolation(error: unknown): boolean {
+  const value = error as { code?: unknown; message?: unknown } | null;
+  const code = String(value?.code || '');
+  const message = String(value?.message || error || '');
+  return code === '23505' || /unique constraint|duplicate key|already exists/i.test(message);
+}

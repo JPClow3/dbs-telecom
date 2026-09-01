@@ -30,10 +30,11 @@ import {
 
 interface InvoicesScreenProps {
   customer: Customer;
+  invoiceId?: string;
   onNavigateToChat?: () => void;
 }
 
-export const InvoicesScreen: React.FC<InvoicesScreenProps> = ({ customer, onNavigateToChat }) => {
+export const InvoicesScreen: React.FC<InvoicesScreenProps> = ({ customer, invoiceId, onNavigateToChat }) => {
   const { colors, isDark } = useAppTheme();
   const { isConnected, isInternetReachable } = useNetworkStatus();
   const isNetworkOnline = isConnected && isInternetReachable !== false;
@@ -43,6 +44,10 @@ export const InvoicesScreen: React.FC<InvoicesScreenProps> = ({ customer, onNavi
   const [loadError, setLoadError] = useState(false);
   const [toastInfo, setToastInfo] = useState<{ message: string; type: ToastType } | null>(null);
   const [filter, setFilter] = useState<'ALL' | 'PENDING' | 'PAID'>('ALL');
+
+  useEffect(() => {
+    if (invoiceId) setFilter('ALL');
+  }, [invoiceId]);
 
   const fetchInvoices = async () => {
     setLoadError(false);
@@ -130,6 +135,14 @@ export const InvoicesScreen: React.FC<InvoicesScreenProps> = ({ customer, onNavi
     if (filter === 'PAID') return i.status === 'PAGO';
     return true;
   });
+  const selectedInvoice = invoiceId
+    ? invoices.find((invoice) =>
+        invoice.id === invoiceId ||
+        invoice.id === `demo-${invoiceId}` ||
+        invoice.documento === invoiceId
+      )
+    : undefined;
+  const visibleInvoices = invoiceId && selectedInvoice ? [selectedInvoice] : filteredInvoices;
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
@@ -360,7 +373,7 @@ export const InvoicesScreen: React.FC<InvoicesScreenProps> = ({ customer, onNavi
         </View>
       ) : (
         <FlatList
-          data={filteredInvoices}
+          data={visibleInvoices}
           keyExtractor={(item) => item.id}
           renderItem={({ item }) => (
             <InvoiceCard

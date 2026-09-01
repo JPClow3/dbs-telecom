@@ -15,6 +15,7 @@ export {
   setAuthToken,
 } from './api/transport';
 export {
+  deactivateDemoMode,
   exitDemoMode,
   isDemoMode,
   startDemoMode,

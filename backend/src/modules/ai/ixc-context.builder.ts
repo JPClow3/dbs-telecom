@@ -21,6 +21,8 @@ export interface IXCContextBundle {
     planName?: string;
   }>;
   financial: {
+    /** AVAILABLE means the ERP query completed; UNAVAILABLE is never paid. */
+    status: 'AVAILABLE' | 'UNAVAILABLE';
     hasOpenInvoices: boolean;
     openInvoicesCount: number;
     nearestDueDate?: string;
@@ -55,6 +57,7 @@ export class IXCContextBuilder {
     let clientData: IXCContextBundle['client'] = undefined;
     let contractsData: IXCContextBundle['contracts'] = [];
     let financialData: IXCContextBundle['financial'] = {
+      status: 'UNAVAILABLE',
       hasOpenInvoices: false,
       openInvoicesCount: 0,
       invoices: [],
@@ -95,10 +98,16 @@ export class IXCContextBuilder {
         }));
 
         // 3. Busca faturas no IXC
-        const invoices = await financialService.getInvoicesByClientId(clientId);
+        // The financial service also returns paid rows so the customer-facing
+        // invoice view can show a reconciled payment. They are not debts and
+        // must never be presented to the model as open invoices.
+        const invoices = (await financialService.getInvoicesByClientId(clientId))
+          .filter((invoice) => invoice.status !== 'PAGO');
+        const financialStatus = 'AVAILABLE' as const;
         if (invoices.length > 0) {
           const totalVal = invoices.reduce((acc, inv) => acc + inv.valor, 0);
           financialData = {
+            status: financialStatus,
             hasOpenInvoices: true,
             openInvoicesCount: invoices.length,
             nearestDueDate: invoices[0].dataVencimentoFormatada,
@@ -111,6 +120,13 @@ export class IXCContextBuilder {
               documento: inv.documento,
               obs: inv.obs,
             })),
+          };
+        } else {
+          financialData = {
+            status: financialStatus,
+            hasOpenInvoices: false,
+            openInvoicesCount: 0,
+            invoices: [],
           };
         }
 
@@ -173,7 +189,9 @@ export class IXCContextBuilder {
       sections.push(`[CONTRATOS ATIVOS IXC]: ${contractsStr}`);
     }
 
-    if (bundle.financial.hasOpenInvoices) {
+    if (bundle.financial.status === 'UNAVAILABLE') {
+      sections.push('[SITUAÇÃO FINANCEIRA IXC]: Indisponível no momento. Não é possível confirmar o status das faturas ou afirmar que a conta está em dia.');
+    } else if (bundle.financial.hasOpenInvoices) {
       const invDetails = bundle.financial.invoices
         .map((inv) => `  * Fatura #${inv.id}: Valor ${inv.valor} com vencimento em ${inv.vencimento}. Linha Digitável: ${inv.linhaDigitavel}`)
         .join('\n');

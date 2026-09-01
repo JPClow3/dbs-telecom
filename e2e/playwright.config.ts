@@ -1,6 +1,9 @@
 import { defineConfig, devices } from '@playwright/test';
 import path from 'path';
 
+const e2ePort = Number(process.env.E2E_PORT || 3000);
+const e2eBaseUrl = `http://localhost:${e2ePort}`;
+
 // Defesa em profundidade: os testes E2E NUNCA devem enxergar credenciais de
 // banco. O launcher (scripts/serve-current-mobile.mjs) já força o isolamento,
 // mas remover aqui garante que nenhum processo filho do Playwright herde a
@@ -23,7 +26,7 @@ export default defineConfig({
   },
   reporter: [['list'], ['html', { open: 'never' }]],
   use: {
-    baseURL: 'http://localhost:3000',
+    baseURL: e2eBaseUrl,
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
@@ -42,7 +45,7 @@ export default defineConfig({
   webServer: {
     command: 'node scripts/serve-current-mobile.mjs',
     cwd: path.resolve(__dirname),
-    url: 'http://localhost:3000/api/health',
+    url: `${e2eBaseUrl}/api/health`,
     // Reuse would bypass the fresh Expo export and can serve an old bundle.
     reuseExistingServer: false,
     // A clean Expo export (and a cold Metro cache after dependency changes)

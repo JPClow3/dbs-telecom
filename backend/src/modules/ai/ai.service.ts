@@ -1,6 +1,6 @@
 import { CONFIG } from '../../config/env.js';
-import { aiGuardrails, AIOutputData } from './ai.guardrails.js';
-import { geminiProvider } from './gemini.provider.js';
+import { aiGuardrails, AIOutputData, AIToolAction } from './ai.guardrails.js';
+import { AI_PROVIDER_DEADLINE_MS, geminiProvider } from './gemini.provider.js';
 import { ixcContextBuilder, IXCContextBundle } from './ixc-context.builder.js';
 import { fastRouterService } from './fast-router.service.js';
 
@@ -19,6 +19,7 @@ export interface AIClassificationResult {
     slownessReported?: boolean | null;
   } | null;
   suggestedAction?: 'START_DIAGNOSTIC' | 'GET_INVOICE' | 'SHOW_PLANS' | 'HANDLE_OBJECTION' | 'NONE' | null;
+  toolAction?: AIToolAction;
   aiProvider?: 'gemini' | 'openai' | 'heuristic' | 'mock' | 'fast-route';
   aiModel?: string;
   guardrailApplied?: boolean;
@@ -36,7 +37,18 @@ export class AIService {
     const text = message.trim();
     const clientId = context?.clientId;
 
-    // --- 1. GUARDRAIL DE ENTRADA (Sanitização, Jailbreak & Out-of-Scope) ---
+    // --- 1. LIMITE DE ENTRADA (controle de custo/DoS, sempre ligado) ---
+    const lengthResult = aiGuardrails.validateInputLength(text);
+    if (!lengthResult.passed && lengthResult.safeResponse) {
+      return {
+        ...lengthResult.safeResponse,
+        aiProvider: 'heuristic',
+        guardrailApplied: true,
+        guardrailReason: lengthResult.reason,
+      };
+    }
+
+    // --- 2. GUARDRAILS DE CONTEÚDO (opcionais por configuração) ---
     if (CONFIG.ai.guardrailsEnabled) {
       const guardrailResult = aiGuardrails.validateInput(text, context?.customerName);
       if (!guardrailResult.passed && guardrailResult.safeResponse) {
@@ -63,8 +75,10 @@ export class AIService {
           if (contextBundle.financial.hasOpenInvoices && contextBundle.financial.invoices.length > 0) {
             const inv = contextBundle.financial.invoices[0];
             friendlyMsg = `Localizei sua fatura no valor de **${inv.valor}** com vencimento em **${inv.vencimento}**, ${firstName}.\n\nVocê pode copiar a linha digitável ou chave PIX abaixo para efetuar o pagamento:`;
-          } else {
+          } else if (contextBundle.financial.status === 'AVAILABLE') {
             friendlyMsg = `Consultei nosso sistema no IXC e você não possui faturas em aberto no momento, ${firstName}! Sua conta está 100% em dia com a DBS Telecom. 🌟`;
+          } else {
+            friendlyMsg = `Não consegui confirmar suas faturas no IXC neste momento, ${firstName}. Tente novamente em instantes.`;
           }
         } catch (e) {
           console.warn('[AIService] Falha ao contextualizar fatura no FastRouter:', e);
@@ -88,6 +102,7 @@ export class AIService {
     const contextBundle: IXCContextBundle = await ixcContextBuilder.buildContext(clientId);
 
     // --- 4. GOOGLE GEMINI LLM (TIER 1 - IA Studio para Casos Complexos / Conversacionais) ---
+    const providerDeadlineAt = Date.now() + AI_PROVIDER_DEADLINE_MS;
     if ((CONFIG.ai.provider === 'gemini' || CONFIG.ai.provider === 'hybrid') && geminiProvider.isConfigured()) {
       try {
         const geminiResult = await geminiProvider.generateResponse({
@@ -95,7 +110,7 @@ export class AIService {
           clientId,
           contextBundle,
           conversationHistory: context?.history,
-        });
+        }, providerDeadlineAt);
 
         if (geminiResult) {
           // Validação de Saída e Anti-Alucinação com Zod e Dados IXC
@@ -115,7 +130,7 @@ export class AIService {
     // --- 5. OPENAI FALLBACK (Caso configurado) ---
     if ((CONFIG.ai.provider === 'openai' || CONFIG.ai.provider === 'hybrid') && CONFIG.ai.openaiApiKey) {
       try {
-        const openaiResult = await this.classifyWithOpenAI(text, contextBundle);
+        const openaiResult = await this.classifyWithOpenAI(text, contextBundle, providerDeadlineAt);
         if (openaiResult) {
           const validation = aiGuardrails.validateOutput(openaiResult, contextBundle);
           return {
@@ -158,7 +173,7 @@ export class AIService {
       if (contextBundle?.financial.hasOpenInvoices && contextBundle.financial.invoices.length > 0) {
         const inv = contextBundle.financial.invoices[0];
         friendlyMessage = `Localizei sua fatura no valor de **${inv.valor}** com vencimento em **${inv.vencimento}**.\n\nVocê pode copiar a linha digitável ou chave PIX abaixo para efetuar o pagamento:`;
-      } else if (contextBundle && !contextBundle.financial.hasOpenInvoices) {
+      } else if (contextBundle && contextBundle.financial.status === 'AVAILABLE' && !contextBundle.financial.hasOpenInvoices) {
         friendlyMessage = `Consultei o sistema no IXC e você não possui faturas em aberto no momento! Sua conta está 100% em dia com a DBS Telecom. 🌟`;
       }
 
@@ -280,7 +295,14 @@ export class AIService {
   /**
    * Chamada de fallback à API da OpenAI (caso configurada)
    */
-  private async classifyWithOpenAI(message: string, contextBundle?: IXCContextBundle): Promise<AIOutputData | null> {
+  private async classifyWithOpenAI(
+    message: string,
+    contextBundle?: IXCContextBundle,
+    deadlineAt = Date.now() + AI_PROVIDER_DEADLINE_MS
+  ): Promise<AIOutputData | null> {
+    const remainingMs = deadlineAt - Date.now();
+    if (remainingMs <= 0) return null;
+
     const formattedContext = contextBundle ? ixcContextBuilder.formatContextForPrompt(contextBundle) : '';
     const systemPrompt = `Você é o assistente virtual inteligente da DBS TELECOM. Analise a mensagem e retorne um JSON estrito no formato do schema.
 Contexto IXC:
@@ -292,6 +314,7 @@ ${formattedContext}`;
         Authorization: `Bearer ${CONFIG.ai.openaiApiKey}`,
         'Content-Type': 'application/json',
       },
+      signal: AbortSignal.timeout(Math.min(4500, remainingMs)),
       body: JSON.stringify({
         model: 'gpt-4o-mini',
         messages: [

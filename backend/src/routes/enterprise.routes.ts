@@ -6,8 +6,8 @@ import { opticalService } from '../modules/optical/optical.service.js';
 import { notificationsService } from '../modules/notifications/notifications.service.js';
 import { referralService } from '../modules/referral/referral.service.js';
 import { financialService } from '../modules/financial/financial.service.js';
-import { jwtService } from '../modules/auth/jwt.service.js';
-import { authMiddleware, enforceAntiIdor, requireAdmin } from '../middlewares/auth.middleware.js';
+import { authMiddleware, enforceAntiIdor, requireAdmin, verifyAuthenticatedToken } from '../middlewares/auth.middleware.js';
+import { registerSseResponse } from '../app.js';
 import { sendApiError } from './route.helpers.js';
 
 function requireDemoAdapter(res: Response, feature: string): boolean {
@@ -203,10 +203,9 @@ apiRouter.post('/financial/pix/webhook', async (req: Request, res: Response) => 
     if (!CONFIG.demoMode) {
       const signature = req.get('x-pix-signature') || req.get('x-webhook-signature') || req.get('x-signature');
       const timestamp = req.get('x-pix-timestamp') || req.get('x-webhook-timestamp');
-      const eventId = payload?.txid || payload?.endToEndId;
 
-      if (!signature || !timestamp || !eventId || !req.rawBody) {
-        return res.status(401).json({ error: 'Assinatura, timestamp e identificador do webhook são obrigatórios.', code: 'PIX_SIGNATURE_REQUIRED' });
+      if (!signature || !timestamp || !req.rawBody) {
+        return res.status(401).json({ error: 'Assinatura e timestamp do webhook são obrigatórios.', code: 'PIX_SIGNATURE_REQUIRED' });
       }
 
       const timestampSeconds = Number(timestamp);
@@ -216,14 +215,20 @@ apiRouter.post('/financial/pix/webhook', async (req: Request, res: Response) => 
       if (!financialService.verifyPixWebhookSignature(req.rawBody, signature)) {
         return res.status(401).json({ error: 'Assinatura do webhook PIX inválida.', code: 'PIX_SIGNATURE_INVALID' });
       }
-      if (!financialService.claimPixEvent(String(eventId))) {
-        return res.status(409).json({ error: 'Webhook PIX duplicado.', code: 'PIX_REPLAY_REJECTED' });
-      }
     }
 
     const result = await financialService.processPixWebhook(payload);
+    if (!CONFIG.demoMode && result.duplicate) {
+      return res.status(409).json({ error: 'Webhook PIX duplicado.', code: 'PIX_REPLAY_REJECTED' });
+    }
     return res.json(result);
   } catch (error: any) {
+    if (error?.code === 'PIX_PERSISTENCE_FAILED') {
+      return res.status(503).json({
+        error: 'Não foi possível registrar o pagamento PIX. O provedor deve reenviar o webhook.',
+        code: 'PIX_PERSISTENCE_FAILED',
+      });
+    }
     return res.status(400).json({ error: error.message || 'Payload PIX inválido.', code: 'PIX_PAYLOAD_INVALID' });
   }
 });
@@ -261,12 +266,14 @@ apiRouter.get('/financial/pix/stream/:clientId', (req: Request, res: Response) =
   }
 
   try {
-    const user = jwtService.verifyToken(token);
-    if (!user.clientId || (user.role && user.role !== 'admin' && user.role !== 'client')) {
-      throw new Error('invalid claims');
+    req.user = verifyAuthenticatedToken(token);
+  } catch (error: any) {
+    if (error?.code === 'SESSION_REVOKED') {
+      return res.status(401).json({
+        error: 'Não autorizado: sessão encerrada. Faça login novamente.',
+        code: 'SESSION_REVOKED',
+      });
     }
-    req.user = user;
-  } catch {
     return res.status(401).json({
       error: 'Não autorizado: Token JWT inválido, expirado ou corrompido.',
       code: 'TOKEN_INVALID',
@@ -292,21 +299,52 @@ apiRouter.get('/financial/pix/stream/:clientId', (req: Request, res: Response) =
   res.setHeader('Connection', 'keep-alive');
   res.setHeader('X-Accel-Buffering', 'no');
   res.flushHeaders?.();
+  res.isSse = true;
+  registerSseResponse(res);
+
+  const streamConnectedAt = new Date().toISOString();
+  const deliveredPaymentKeys = new Set<string>();
 
   // Envia heartbeat inicial
   res.write(`data: ${JSON.stringify({ event: 'CONNECTED', clientId: targetClientId, timestamp: Date.now(), simulated: CONFIG.demoMode })}\n\n`);
 
   const onPixPayment = (data: any) => {
+    const key = String(data?.webhookEventId || `${data?.invoiceId || ''}:${data?.paidAt || ''}`);
+    if (deliveredPaymentKeys.has(key)) return;
+    deliveredPaymentKeys.add(key);
+    if (res.writableEnded || res.destroyed) return;
     res.write(`data: ${JSON.stringify(data)}\n\n`);
   };
 
   financialService.pixEvents.on(`pix:${targetClientId}`, onPixPayment);
 
-  // O EventEmitter do PIX é processo-local (eventos não são persistidos), então
-  // não há o que re-emitir do banco como no stream da fila. O keepalive mantém
-  // a conexão viva através de proxies/Workers e permite checar liveness; a
-  // confirmação real chega via evento ou via notificação persistida por
-  // processPixWebhook.
+  // The emitter is a fast same-process path. Polling the durable payment row
+  // is the cross-instance path: a webhook handled by another worker is still
+  // delivered exactly once to this SSE connection.
+  const pollPersistedPayment = async () => {
+    if (res.writableEnded || res.destroyed) return;
+    try {
+      const payment = await financialService.getLatestPixPaymentForClient(targetClientId, streamConnectedAt);
+      if (!payment) return;
+      const key = String(payment.webhook_event_id || payment.id);
+      if (deliveredPaymentKeys.has(key)) return;
+      deliveredPaymentKeys.add(key);
+      res.write(`data: ${JSON.stringify({
+        event: 'PIX_CONFIRMED',
+        invoiceId: payment.invoice_id,
+        clientId: payment.client_id,
+        amount: Number(payment.amount),
+        paidAt: payment.paid_at,
+        webhookEventId: payment.webhook_event_id,
+        message: 'Fatura Paga com Sucesso!',
+      })}\n\n`);
+    } catch (error) {
+      console.warn('[PIX SSE] Falha ao consultar confirmação persistida:', error);
+    }
+  };
+  const paymentPollTimer = setInterval(() => void pollPersistedPayment(), 1000);
+  void pollPersistedPayment();
+
   const keepAliveTimer = setInterval(() => {
     try {
       res.write(': keepalive\n\n');
@@ -317,6 +355,7 @@ apiRouter.get('/financial/pix/stream/:clientId', (req: Request, res: Response) =
 
   req.on('close', () => {
     clearInterval(keepAliveTimer);
+    clearInterval(paymentPollTimer);
     financialService.pixEvents.off(`pix:${targetClientId}`, onPixPayment);
   });
 });

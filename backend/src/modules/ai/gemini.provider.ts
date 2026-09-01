@@ -31,6 +31,16 @@ export interface GeminiAudioResponse {
 const MAX_OUTPUT_TOKENS_CONVERSATIONAL = 1024;
 const MAX_OUTPUT_TOKENS_STRUCTURED_JSON = 2048;
 
+/** Hard wall-clock budget shared by provider retries for one request. */
+export const AI_PROVIDER_DEADLINE_MS = 12_000;
+const GEMINI_ATTEMPT_TIMEOUT_MS = 4_500;
+const GEMINI_AUDIO_ATTEMPT_TIMEOUT_MS = 6_000;
+
+function remainingAttemptTimeout(deadlineAt: number, perAttemptMs: number): number {
+  const remaining = deadlineAt - Date.now();
+  return remaining > 0 ? Math.min(remaining, perAttemptMs) : 0;
+}
+
 function cleanJsonText(raw: string): string {
   const trimmed = raw.trim();
   if (trimmed.startsWith('```')) {
@@ -147,8 +157,10 @@ export function handleFunctionCall(
       if (contextBundle?.financial.hasOpenInvoices && contextBundle.financial.invoices.length > 0) {
         const inv = contextBundle.financial.invoices[0];
         friendlyMessage = `Localizei sua fatura no valor de **${inv.valor}** com vencimento em **${inv.vencimento}**, ${firstName}.\n\nVocê pode copiar a chave PIX ou a linha digitável abaixo para efetuar o pagamento em instantes com toda comodidade:`;
-      } else if (contextBundle && !contextBundle.financial.hasOpenInvoices) {
+      } else if (contextBundle && contextBundle.financial.status === 'AVAILABLE' && !contextBundle.financial.hasOpenInvoices) {
         friendlyMessage = `Consultei nosso sistema no IXC e você está com todas as contas em dia, ${firstName}! Não há nenhuma fatura pendente no momento. Muito obrigado pela parceria com a DBS Telecom! 🌟`;
+      } else if (contextBundle?.financial.status === 'UNAVAILABLE') {
+        friendlyMessage = `Não consegui confirmar suas faturas no IXC neste momento, ${firstName}. Tente novamente em instantes.`;
       }
 
       return {
@@ -164,13 +176,15 @@ export function handleFunctionCall(
     }
 
     case 'createTicket': {
-      const subject = args.subject || 'Atendimento técnico';
+      const subject = String(args.subject || 'Atendimento técnico').trim().slice(0, 200) || 'Atendimento técnico';
+      const message = String(args.message || 'Solicitação de suporte técnico.').trim().slice(0, 2000) || 'Solicitação de suporte técnico.';
       return {
         department: 'SUPORTE',
         confidence: 0.98,
-        intent: 'ABERTURA_CHAMADO_FUNCTION',
-        friendlyMessage: `Compreendido, ${firstName}! Registrei a abertura da sua Ordem de Serviço sobre "${subject}". Nossa equipe de suporte especializado já recebeu seus dados para dar prioridade ao seu atendimento.`,
-        suggestedAction: 'START_DIAGNOSTIC',
+        intent: 'ABERTURA_CHAMADO',
+        friendlyMessage: `Compreendido, ${firstName}! Vou registrar sua Ordem de Serviço sobre "${subject}" agora, após a confirmação do IXC.`,
+        suggestedAction: 'NONE',
+        toolAction: { type: 'CREATE_TICKET', subject, message },
       };
     }
 
@@ -178,9 +192,15 @@ export function handleFunctionCall(
       return {
         department: 'FINANCEIRO',
         confidence: 0.99,
-        intent: 'DESBLOQUEIO_CONFIANCA_FUNCTION',
-        friendlyMessage: `Perfeito, ${firstName}! Estou ativando agora o seu **Desbloqueio em Confiança (Promessa de Pagamento)** por 72 horas para que sua conexão seja restabelecida de imediato.`,
+        intent: 'DESBLOQUEIO_CONFIANCA',
+        friendlyMessage: `Perfeito, ${firstName}! Vou solicitar seu **Desbloqueio em Confiança (Promessa de Pagamento)** por 72 horas e confirmo assim que o IXC responder.`,
         suggestedAction: 'NONE',
+        toolAction: {
+          type: 'UNBLOCK_PROMISE',
+          ...(typeof args.contractId === 'string' && args.contractId.trim()
+            ? { contractId: args.contractId.trim().slice(0, 100) }
+            : {}),
+        },
       };
     }
 
@@ -367,7 +387,10 @@ ${formattedContext}`;
   /**
    * Processa a mensagem do cliente no Google Gemini via Google AI Studio REST API com Function Calling nativo e failover
    */
-  async generateResponse(req: GeminiClassificationRequest): Promise<AIOutputData | null> {
+  async generateResponse(
+    req: GeminiClassificationRequest,
+    deadlineAt = Date.now() + AI_PROVIDER_DEADLINE_MS
+  ): Promise<AIOutputData | null> {
     if (!this.isConfigured()) {
       return null;
     }
@@ -386,13 +409,15 @@ ${formattedContext}`;
     const uniqueModels = Array.from(new Set(candidateModels));
 
     for (const model of uniqueModels) {
+      const timeoutMs = remainingAttemptTimeout(deadlineAt, GEMINI_ATTEMPT_TIMEOUT_MS);
+      if (!timeoutMs) break;
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${CONFIG.ai.geminiApiKey}`;
 
       try {
         const res = await fetch(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          signal: AbortSignal.timeout(4500),
+          signal: AbortSignal.timeout(timeoutMs),
           body: JSON.stringify({
             systemInstruction: {
               parts: [{ text: systemPrompt }],
@@ -458,7 +483,8 @@ ${formattedContext}`;
    */
   async generateResponseStream(
     req: GeminiClassificationRequest,
-    onChunk: (chunkText: string) => void
+    onChunk: (chunkText: string) => void,
+    deadlineAt = Date.now() + AI_PROVIDER_DEADLINE_MS
   ): Promise<AIOutputData | null> {
     if (!this.isConfigured()) {
       return null;
@@ -478,13 +504,15 @@ ${formattedContext}`;
     const uniqueModels = Array.from(new Set(candidateModels));
 
     for (const model of uniqueModels) {
+      const timeoutMs = remainingAttemptTimeout(deadlineAt, GEMINI_ATTEMPT_TIMEOUT_MS);
+      if (!timeoutMs) break;
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${CONFIG.ai.geminiApiKey}`;
 
       try {
         const res = await fetch(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          signal: AbortSignal.timeout(4500),
+          signal: AbortSignal.timeout(timeoutMs),
           body: JSON.stringify({
             systemInstruction: {
               parts: [{ text: systemPrompt }],
@@ -563,13 +591,16 @@ ${formattedContext}`;
     }
 
     // Se o stream do Gemini falhou ou não retornou, fallback para generateResponse
-    return this.generateResponse(req);
+    return this.generateResponse(req, deadlineAt);
   }
 
   /**
    * 🎙️ Processamento Multimodal de Áudio com Google Gemini (Transcrição + Classificação e Resposta)
    */
-  async processAudioMessage(req: GeminiAudioRequest): Promise<GeminiAudioResponse | null> {
+  async processAudioMessage(
+    req: GeminiAudioRequest,
+    deadlineAt = Date.now() + AI_PROVIDER_DEADLINE_MS
+  ): Promise<GeminiAudioResponse | null> {
     if (!this.isConfigured()) {
       return null;
     }
@@ -612,13 +643,15 @@ ${formattedContext}`;
     const uniqueModels = Array.from(new Set(candidateModels));
 
     for (const model of uniqueModels) {
+      const timeoutMs = remainingAttemptTimeout(deadlineAt, GEMINI_AUDIO_ATTEMPT_TIMEOUT_MS);
+      if (!timeoutMs) break;
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${CONFIG.ai.geminiApiKey}`;
 
       try {
         const res = await fetch(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          signal: AbortSignal.timeout(6000),
+          signal: AbortSignal.timeout(timeoutMs),
           body: JSON.stringify({
             systemInstruction: {
               parts: [{ text: systemPrompt }],

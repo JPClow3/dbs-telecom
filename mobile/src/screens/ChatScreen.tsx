@@ -19,7 +19,7 @@ import { Toast, ToastType } from '../components/Toast';
 import { CSATCard } from '../components/CSATCard';
 import { QueueCard } from '../components/QueueCard';
 import { AudioRecorder } from '../components/AudioRecorder';
-import { apiService } from '../services/api';
+import { apiService, isDemoMode } from '../services/api';
 import { useAppTheme } from '../context/ThemeContext';
 import { useNetworkStatus } from '../hooks/useNetworkStatus';
 import { hapticFeedback } from '../utils/haptics';
@@ -88,7 +88,11 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
   const { colors, isDark } = useAppTheme();
   const { isConnected, isInternetReachable } = useNetworkStatus();
   const isNetworkOnline = isConnected && isInternetReachable !== false;
-  const isDemoEnvironment = Boolean(customer.isDemo);
+  // The backend may intentionally return demo fixture data while still
+  // issuing a real auth token for the local Gemini preview. Only the explicit
+  // in-memory shortcut is offline/local; a token-backed demo session must hit
+  // the server and must not be labelled "PRÉVIA LOCAL".
+  const isDemoEnvironment = isDemoMode() && Boolean(customer.isDemo);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputText, setInputText] = useState('');
   const [isTyping, setIsTyping] = useState(false);
@@ -145,14 +149,14 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     if (isDemoEnvironment) return;
     try {
       const result = await outbox.flush(async (entry) => {
-        const reply = await apiService.sendMessage(entry.text, entry.sessionId, customer.id, entry.id);
+        const reply = await apiService.sendMessage(entry.text, entry.sessionId, entry.clientId, entry.clientMessageId, false);
         // sendMessage devolve mensagem de sistema em vez de lançar quando a
         // rede cai; trata UNAVAILABLE/UNAUTHORIZED como falha de envio.
         if (reply.dataState === 'UNAVAILABLE' || reply.dataState === 'UNAUTHORIZED') {
           throw new Error('Envio da outbox ainda sem conexão');
         }
         setMessages((prev) => [...prev, reply]);
-      }, { maxRetries: 3 });
+      }, { maxRetries: 3, clientId: customer.id });
       if (result.delivered.length > 0 && result.delivered.includes(justEnqueuedId ?? '')) {
         showToast('Mensagem reenviada com sucesso!', 'SUCCESS');
         return;
@@ -181,7 +185,8 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
   }, [isNetworkOnline, isDemoEnvironment]);
 
   // Enfileira na outbox; usado pelo ramo offline do handleSend.
-  const enqueueOutbox = (sessionId: string, text: string) => outbox.enqueue(sessionId, text);
+  const enqueueOutbox = (sessionId: string, text: string, clientMessageId?: string) =>
+    outbox.enqueue(sessionId, text, new Date(), { clientId: customer.id, clientMessageId });
 
   /**
    * ⚡ Envio de Mensagem com Streaming SSE (efeito digitação tipo ChatGPT)
@@ -275,7 +280,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
         // Outbox offline: persiste a mensagem para reenvio automático na
         // reconexão, em vez de perdê-la com um simples toast.
         try {
-          const entry = await enqueueOutbox(sessionId, text);
+          const entry = await enqueueOutbox(sessionId, text, clientMessageId);
           showToast('Mensagem salva para reenvio', 'INFO');
           void flushOutboxNow(entry.id);
         } catch (outboxError) {

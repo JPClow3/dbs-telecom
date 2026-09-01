@@ -5,6 +5,7 @@
 export {
   DEMO_CUSTOMER,
   DEMO_MODE_ENABLED,
+  deactivateDemoMode,
   exitDemoMode,
   isDemoMode,
   startDemoMode,

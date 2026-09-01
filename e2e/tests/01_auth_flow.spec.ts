@@ -67,7 +67,7 @@ test.describe('🔐 1. Authentication & Login Flow', () => {
     await expect(page.getByText(/Ambiente demo|App online|Sem internet/).first()).toBeVisible({ timeout: 15000 });
   });
 
-  test('deve autenticar pelo atalho local quando habilitado ou pelo cliente de teste', async ({ page }) => {
+  test('deve autenticar pelo cliente demo do ambiente E2E isolado', async ({ page }) => {
     await page.goto('/');
     await loginTestCustomer(page);
   });

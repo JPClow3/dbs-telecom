@@ -33,7 +33,9 @@ export class ReferralService {
     return {
       clientId,
       referralCode: `DBS-${clientId}`,
-      referralLink: `https://dbstelecom.com.br/indique?ref=DBS-${clientId}`,
+      // The current adapter has no server-issued referral URL. Never expose a
+      // locally fabricated link that a customer could mistake for a live offer.
+      referralLink: '',
       totalReferred: friends.length,
       activeDiscounts,
       totalSaved,

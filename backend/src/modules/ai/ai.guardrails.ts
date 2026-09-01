@@ -3,6 +3,22 @@ import { CONFIG } from '../../config/env.js';
 import { DepartmentType } from './ai.service.js';
 import { IXCContextBundle } from './ixc-context.builder.js';
 
+export type AIToolAction =
+  | { type: 'CREATE_TICKET'; subject: string; message: string }
+  | { type: 'UNBLOCK_PROMISE'; contractId?: string };
+
+const AIToolActionSchema = z.discriminatedUnion('type', [
+  z.object({
+    type: z.literal('CREATE_TICKET'),
+    subject: z.string().trim().min(1).max(200),
+    message: z.string().trim().min(1).max(2000),
+  }),
+  z.object({
+    type: z.literal('UNBLOCK_PROMISE'),
+    contractId: z.string().trim().max(100).optional(),
+  }),
+]);
+
 export const AIOutputSchema = z.object({
   department: z.enum(['COMERCIAL', 'SUPORTE', 'FINANCEIRO', 'GERAL']),
   confidence: z.number().min(0).max(1),
@@ -22,6 +38,7 @@ export const AIOutputSchema = z.object({
     .enum(['START_DIAGNOSTIC', 'GET_INVOICE', 'SHOW_PLANS', 'HANDLE_OBJECTION', 'NONE'])
     .nullable()
     .optional(),
+  toolAction: AIToolActionSchema.optional(),
 });
 
 export type AIOutputData = z.infer<typeof AIOutputSchema>;
@@ -94,6 +111,24 @@ export class AIGuardrails {
       .trim();
   }
 
+  /** The length ceiling is a cost/DoS control and is never configurable off. */
+  validateInputLength(input: string): GuardrailCheckResult {
+    const normalized = AIGuardrails.normalizeInput(input);
+    if (normalized.length <= AIGuardrails.MAX_INPUT_LENGTH) return { passed: true };
+    return {
+      passed: false,
+      violationType: 'INPUT_TOO_LONG',
+      safeResponse: {
+        department: 'GERAL',
+        confidence: 1.0,
+        intent: 'GUARDRAIL_INPUT_LIMIT',
+        friendlyMessage: 'Sua mensagem é um pouco longa. Por favor, envie uma mensagem mais direta para que eu possa te ajudar melhor.',
+        suggestedAction: 'NONE',
+      },
+      reason: 'Input excedeu o limite máximo permitido de caracteres.',
+    };
+  }
+
   /**
    * Valida a entrada do usuário contra injeções, limites de tamanho e escopo
    */
@@ -101,20 +136,8 @@ export class AIGuardrails {
     const normalized = AIGuardrails.normalizeInput(input);
 
     // 1. Limite de tamanho (Prevenção de DoS / Context Overflow)
-    if (normalized.length > AIGuardrails.MAX_INPUT_LENGTH) {
-      return {
-        passed: false,
-        violationType: 'INPUT_TOO_LONG',
-        safeResponse: {
-          department: 'GERAL',
-          confidence: 1.0,
-          intent: 'GUARDRAIL_INPUT_LIMIT',
-          friendlyMessage: 'Sua mensagem é um pouco longa. Por favor, envie uma mensagem mais direta para que eu possa te ajudar melhor.',
-          suggestedAction: 'NONE',
-        },
-        reason: 'Input excedeu o limite máximo permitido de caracteres.',
-      };
-    }
+    const lengthResult = this.validateInputLength(input);
+    if (!lengthResult.passed) return lengthResult;
 
     // 2. Detecção de Prompt Injection / Jailbreak
     for (const pattern of AIGuardrails.INJECTION_PATTERNS) {
@@ -189,7 +212,7 @@ export class AIGuardrails {
 
     // Anti-Hallucination Guardrail: Se a IA categorizou como FINANCEIRO
     if (data.department === 'FINANCEIRO' && contextBundle) {
-      if (!contextBundle.financial.hasOpenInvoices) {
+      if (contextBundle.financial.status === 'AVAILABLE' && !contextBundle.financial.hasOpenInvoices) {
         // Se a base do IXC não tem faturas abertas, força a mensagem a refletir adimplência
         if (
           data.friendlyMessage.toLowerCase().includes('código de barras') ||

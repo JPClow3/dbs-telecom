@@ -1,6 +1,25 @@
 import { getDatabase } from '../../database/db.js';
 import { ChatMessage, ChatSession } from './chat.service.js';
 import { DepartmentType } from '../ai/ai.service.js';
+import crypto from 'node:crypto';
+
+export type ChatIdempotencyClaim =
+  | { claimed: true; ownerToken: string }
+  | { claimed: false; pending: true }
+  | { claimed: false; pending: false; response: ChatMessage };
+
+export interface ChatIdempotencyRow {
+  [key: string]: unknown;
+  idempotency_key: string;
+  session_id: string;
+  client_id: string | null;
+  client_message_id: string;
+  owner_token: string;
+  status: 'PENDING' | 'COMPLETED';
+  response_json: string | null;
+  created_at: string;
+  updated_at: string;
+}
 
 export class ChatRepository {
   async getOrCreateSession(sessionId: string, clientId?: string, clientName?: string): Promise<ChatSession> {
@@ -92,8 +111,92 @@ export class ChatRepository {
     await getDatabase().prepare('DELETE FROM chat_sessions WHERE session_id = ?').run(sessionId);
   }
 
+  /**
+   * Claims a client message durably. The partial state is leased so a crashed
+   * worker cannot leave a message permanently blocked, while a fresh worker
+   * still waits for an active worker before attempting any side effect.
+   */
+  async claimChatIdempotency(
+    key: string,
+    sessionId: string,
+    clientId: string | undefined,
+    clientMessageId: string,
+    staleBefore: string,
+  ): Promise<ChatIdempotencyClaim> {
+    const db = getDatabase();
+    const now = new Date().toISOString();
+    const ownerToken = crypto.randomUUID();
+    const inserted = await db.prepare(`
+      INSERT INTO chat_idempotency
+        (idempotency_key, session_id, client_id, client_message_id, owner_token, status, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, 'PENDING', ?, ?)
+      ON CONFLICT(idempotency_key) DO NOTHING
+    `).run(key, sessionId, clientId || null, clientMessageId, ownerToken, now, now);
+
+    if (inserted.changes === 1) {
+      return { claimed: true, ownerToken };
+    }
+
+    const row = await db.prepare(`
+      SELECT idempotency_key, session_id, client_id, client_message_id, owner_token,
+             status, response_json, created_at, updated_at
+      FROM chat_idempotency WHERE idempotency_key = ?
+    `).get<ChatIdempotencyRow>(key);
+
+    if (!row) {
+      // A failed worker may have released the row between INSERT and SELECT;
+      // retrying the claim is safe and avoids treating that race as success.
+      return this.claimChatIdempotency(key, sessionId, clientId, clientMessageId, staleBefore);
+    }
+
+    if (row.status === 'COMPLETED' && row.response_json) {
+      return { claimed: false, pending: false, response: JSON.parse(row.response_json) as ChatMessage };
+    }
+
+    if (row.status === 'PENDING' && row.updated_at < staleBefore) {
+      const takeover = await db.prepare(`
+        UPDATE chat_idempotency
+        SET owner_token = ?, updated_at = ?
+        WHERE idempotency_key = ? AND status = 'PENDING' AND updated_at < ?
+      `).run(ownerToken, now, key, staleBefore);
+      if (takeover.changes === 1) {
+        return { claimed: true, ownerToken };
+      }
+    }
+
+    return { claimed: false, pending: true };
+  }
+
+  async getChatIdempotency(key: string): Promise<ChatIdempotencyRow | undefined> {
+    return getDatabase().prepare(`
+      SELECT idempotency_key, session_id, client_id, client_message_id, owner_token,
+             status, response_json, created_at, updated_at
+      FROM chat_idempotency WHERE idempotency_key = ?
+    `).get<ChatIdempotencyRow>(key);
+  }
+
+  async completeChatIdempotency(key: string, ownerToken: string, response: ChatMessage): Promise<boolean> {
+    const result = await getDatabase().prepare(`
+      UPDATE chat_idempotency
+      SET status = 'COMPLETED', response_json = ?, updated_at = ?
+      WHERE idempotency_key = ? AND owner_token = ? AND status = 'PENDING'
+    `).run(JSON.stringify(response), new Date().toISOString(), key, ownerToken);
+    return result.changes === 1;
+  }
+
+  async releaseChatIdempotency(key: string, ownerToken: string): Promise<void> {
+    await getDatabase().prepare(`
+      DELETE FROM chat_idempotency
+      WHERE idempotency_key = ? AND owner_token = ? AND status = 'PENDING'
+    `).run(key, ownerToken);
+  }
+
   async clearAll(): Promise<void> {
-    await getDatabase().transaction([{ text: 'DELETE FROM chat_messages' }, { text: 'DELETE FROM chat_sessions' }]);
+    await getDatabase().transaction([
+      { text: 'DELETE FROM chat_messages' },
+      { text: 'DELETE FROM chat_sessions' },
+      { text: 'DELETE FROM chat_idempotency' },
+    ]);
   }
 }
 

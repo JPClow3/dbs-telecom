@@ -79,12 +79,13 @@ export const ReferralModal: React.FC<ReferralModalProps> = ({
 
   const handleCopyLink = async () => {
     if (!data) return;
-    if (isDemo) {
+    const referralLink = data.referralLink?.trim() || '';
+    if (isDemo || !/^https:\/\//i.test(referralLink)) {
       onShowToast('Prévia local: este link é ilustrativo e não pode ser usado para indicação.');
       return;
     }
     hapticFeedback.selection();
-    const result = await copyToClipboard(data.referralLink);
+    const result = await copyToClipboard(referralLink);
     if (result.copied) {
       onShowToast(result.method === 'share' ? 'Link de indicação pronto para compartilhar!' : 'Link de indicação copiado!');
     } else {
@@ -94,12 +95,13 @@ export const ReferralModal: React.FC<ReferralModalProps> = ({
 
   const handleShareWhatsApp = () => {
     if (!data) return;
-    if (isDemo) {
+    const referralLink = data.referralLink?.trim() || '';
+    if (isDemo || !/^https:\/\//i.test(referralLink)) {
       onShowToast('Prévia local: compartilhamento de indicação está desativado.');
       return;
     }
     hapticFeedback.medium();
-    const text = `Oi! Estou usando a internet DBS Fibra e recomendo muito. Acesse pelo meu link para assinar com 50% de desconto no primeiro mês: ${data.referralLink}`;
+    const text = `Oi! Estou usando a internet DBS Fibra e recomendo muito. Acesse pelo meu link para assinar com 50% de desconto no primeiro mês: ${referralLink}`;
     const url = `https://wa.me/?text=${encodeURIComponent(text)}`;
 
     if (Platform.OS === 'web') {
@@ -111,7 +113,9 @@ export const ReferralModal: React.FC<ReferralModalProps> = ({
 
   // Guarda de formato: o extrato só é mapeado quando o servidor devolve uma lista.
   const friendsList = data && Array.isArray(data.friends) ? data.friends : [];
+  const hasShareableReferralLink = Boolean(data?.referralLink && /^https:\/\//i.test(data.referralLink.trim()));
   const referralActionsDisabled = isDemo || loadError || !data;
+  const shareActionsDisabled = referralActionsDisabled || !hasShareableReferralLink;
 
   const handleAddFriend = async () => {
     if (isDemo) {
@@ -248,23 +252,23 @@ export const ReferralModal: React.FC<ReferralModalProps> = ({
                   <TouchableOpacity
                     style={[styles.copyBtn, { backgroundColor: colors.card, borderColor: colors.border }]}
                     onPress={handleCopyLink}
-                    disabled={referralActionsDisabled}
+                    disabled={shareActionsDisabled}
                     accessibilityRole="button"
-                    accessibilityLabel={isDemo ? 'Copiar (demo) — indisponível' : referralActionsDisabled ? 'Copiar link — indisponível sem dados confirmados' : 'Copiar link'}
+                    accessibilityLabel={isDemo ? 'Copiar (demo) — indisponível' : shareActionsDisabled ? 'Copiar link — indisponível sem link confirmado' : 'Copiar link'}
                   >
-                    <Copy size={16} color={referralActionsDisabled ? colors.textMuted : colors.text} />
-                    <Text style={[styles.copyBtnText, { color: referralActionsDisabled ? colors.textMuted : colors.text }]}>{isDemo ? 'Copiar (demo)' : referralActionsDisabled ? 'Copiar indisponível' : 'Copiar Link'}</Text>
+                    <Copy size={16} color={shareActionsDisabled ? colors.textMuted : colors.text} />
+                    <Text style={[styles.copyBtnText, { color: shareActionsDisabled ? colors.textMuted : colors.text }]}>{isDemo ? 'Copiar (demo)' : shareActionsDisabled ? 'Copiar indisponível' : 'Copiar Link'}</Text>
                   </TouchableOpacity>
 
                   <TouchableOpacity
                     style={[styles.whatsappBtn, { backgroundColor: '#25D366' }]}
                     onPress={handleShareWhatsApp}
-                    disabled={referralActionsDisabled}
+                    disabled={shareActionsDisabled}
                     accessibilityRole="button"
-                    accessibilityLabel={isDemo ? 'Compartilhar (demo) — indisponível' : referralActionsDisabled ? 'Compartilhar — indisponível sem dados confirmados' : 'Compartilhar no WhatsApp'}
+                    accessibilityLabel={isDemo ? 'Compartilhar (demo) — indisponível' : shareActionsDisabled ? 'Compartilhar — indisponível sem link confirmado' : 'Compartilhar no WhatsApp'}
                   >
-                    <Share2 size={16} color={referralActionsDisabled ? colors.textMuted : '#FFFFFF'} />
-                    <Text style={[styles.whatsappBtnText, referralActionsDisabled && { color: colors.textMuted }]}>{isDemo ? 'Compartilhar (demo)' : referralActionsDisabled ? 'Compartilhar indisponível' : 'Compartilhar no WhatsApp'}</Text>
+                    <Share2 size={16} color={shareActionsDisabled ? colors.textMuted : '#FFFFFF'} />
+                    <Text style={[styles.whatsappBtnText, shareActionsDisabled && { color: colors.textMuted }]}>{isDemo ? 'Compartilhar (demo)' : shareActionsDisabled ? 'Compartilhar indisponível' : 'Compartilhar no WhatsApp'}</Text>
                   </TouchableOpacity>
                 </View>
               </View>

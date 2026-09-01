@@ -30,19 +30,9 @@ test.describe('💬 2. Digital Support & Chatbot Flow', () => {
     await expect(page.getByText(/R\$\s*\d+/i).first()).toBeVisible();
 
     // Em prévia local, ações financeiras ficam bloqueadas para não induzir pagamento.
-    const localPreview = page.getByText(/AMBIENTE DE DEMONSTRAÇÃO|PRÉVIA LOCAL|Prévia local: confirme a fatura/i).first();
-    if (await localPreview.isVisible().catch(() => false)) {
-      await expect(page.getByRole('button', { name: /Pagar com PIX|PIX indisponível/i }).first()).toBeDisabled();
-      await expect(page.getByRole('button', { name: /Visualizar|Boleto PDF indisponível/i }).first()).toBeDisabled();
-    } else {
-      const copyCodeBtn = page.getByText('Copiar Código').first();
-      await expect(copyCodeBtn).toBeVisible();
-      await copyCodeBtn.click();
-
-      const pixBtn = page.getByText('Pagar com PIX').first();
-      await expect(pixBtn).toBeVisible();
-      await pixBtn.click();
-    }
+    await expect(page.getByText(/AMBIENTE DE DEMONSTRAÇÃO|PRÉVIA LOCAL|Prévia local: confirme a fatura/i).first()).toBeVisible();
+    await expect(page.getByRole('button', { name: /Pagar com PIX|PIX indisponível/i }).first()).toBeDisabled();
+    await expect(page.getByRole('button', { name: /Visualizar|Boleto PDF indisponível/i }).first()).toBeDisabled();
   });
 
   test('deve executar o fluxo completo de pré-diagnóstico de suporte técnico em 3 etapas com CSAT', async ({ page }) => {
@@ -76,9 +66,8 @@ test.describe('💬 2. Digital Support & Chatbot Flow', () => {
 
     // Seleciona tag e confirma CSAT
     const tagChip = page.getByText(/Rápido e Prático/i).first();
-    if (await tagChip.isVisible()) {
-      await tagChip.click();
-    }
+    await expect(tagChip).toBeVisible();
+    await tagChip.click();
 
     const confirmCsatBtn = page.getByText('Confirmar Avaliação').first();
     await confirmCsatBtn.click();

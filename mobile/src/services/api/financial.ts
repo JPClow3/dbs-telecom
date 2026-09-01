@@ -1,6 +1,6 @@
 import { pdfService } from '../pdfService';
 import type { FormattedInvoice, UnblockPromiseResult } from '../../types';
-import { ApiServiceError, getApiUrl, getAuthHeaders, getAuthToken, isApiServiceError, responseError, unavailableError } from './transport';
+import { ApiServiceError, apiFetch, getApiUrl, getAuthHeaders, getAuthToken, isApiServiceError, responseError, unavailableError } from './transport';
 import { MOCK_INVOICES, isDemoMode } from './demoAdapter';
 
 export async function getInvoices(clientId: string): Promise<FormattedInvoice[]> {
@@ -19,7 +19,7 @@ export async function getInvoices(clientId: string): Promise<FormattedInvoice[]>
   }
 
   try {
-    const res = await fetch(`${getApiUrl()}/financial/invoices/${clientId}`, {
+    const res = await apiFetch(`${getApiUrl()}/financial/invoices/${clientId}`, {
       headers: getAuthHeaders(),
     });
     if (res.ok) {
@@ -48,7 +48,7 @@ export async function requestUnblockPromise(clientId: string, contractId?: strin
   }
 
   try {
-    const res = await fetch(`${getApiUrl()}/financial/unblock-promise`, {
+    const res = await apiFetch(`${getApiUrl()}/financial/unblock-promise`, {
       method: 'POST',
       headers: getAuthHeaders(),
       body: JSON.stringify({ clientId, contractId }),
@@ -99,7 +99,7 @@ export async function downloadInvoicePdf(
     // Preflight the real document before invoking the platform opener. This
     // prevents local PDF generation from looking like a successful payment
     // document when the ERP/API is unavailable.
-    const check = await fetch(remoteUrl, { headers: getAuthHeaders() });
+    const check = await apiFetch(remoteUrl, { headers: getAuthHeaders() });
     if (!check.ok) throw await responseError(check, 'Boleto não disponível.');
   } catch (e) {
     throw isApiServiceError(e)

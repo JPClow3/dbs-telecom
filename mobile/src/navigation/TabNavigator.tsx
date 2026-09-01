@@ -101,9 +101,10 @@ export const TabNavigator: React.FC<TabNavigatorProps> = ({ customer, onLogout }
           ),
         }}
       >
-        {() => (
+        {({ route }) => (
           <InvoicesScreen
             customer={customer}
+            invoiceId={route.params?.invoiceId}
             onNavigateToChat={() => navigation.navigate('Chat')}
           />
         )}

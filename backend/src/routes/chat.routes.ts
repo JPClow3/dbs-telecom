@@ -6,6 +6,7 @@ import { csatService } from '../modules/csat/csat.service.js';
 import type { DepartmentType } from '../modules/ai/ai.service.js';
 import { authMiddleware, enforceAntiIdor, optionalAuthMiddleware, requireAdmin } from '../middlewares/auth.middleware.js';
 import { sendApiError, asyncHandler } from './route.helpers.js';
+import { registerSseResponse } from '../app.js';
 
 export function registerChatRoutes(apiRouter: Router): void {
 /**
@@ -33,7 +34,8 @@ apiRouter.post('/chat/greeting', authMiddleware, enforceAntiIdor('clientId'), as
  * mensagem persistida ou entrada na fila.
  */
 apiRouter.post('/chat/message', authMiddleware, enforceAntiIdor('clientId'), async (req: Request, res: Response) => {
-  const { sessionId, message, clientId, messageId } = req.body;
+  const { sessionId, message, clientId, messageId, clientMessageId: bodyClientMessageId } = req.body;
+  const stableMessageId = bodyClientMessageId || messageId;
 
   if (!message) {
     return res.status(400).json({ error: 'Mensagem não pode ser vazia.' });
@@ -51,7 +53,7 @@ apiRouter.post('/chat/message', authMiddleware, enforceAntiIdor('clientId'), asy
     if (sessionOwner && req.user?.role !== 'admin' && sessionOwner !== req.user?.clientId) {
       return res.status(403).json({ error: 'Acesso negado ao histórico de outro cliente.', code: 'CHAT_SESSION_FORBIDDEN' });
     }
-    const response = await chatService.processMessage(sid, message, targetClientId, { clientMessageId: messageId });
+    const response = await chatService.processMessage(sid, message, targetClientId, { clientMessageId: stableMessageId });
     return res.json(response);
   } catch (error: any) {
     return sendApiError(res, 'Erro no processamento da mensagem.', error);
@@ -97,7 +99,7 @@ apiRouter.all('/chat/message/stream', optionalAuthMiddleware, async (req: Reques
   const message = req.body?.message || (req.query.message as string);
   const sessionId = req.body?.sessionId || (req.query.sessionId as string);
   const requestedClientId = req.body?.clientId || (req.query.clientId as string);
-  const clientMessageId = (req.body?.messageId || req.query.messageId) as string | undefined;
+  const clientMessageId = (req.body?.clientMessageId || req.body?.messageId || req.query.clientMessageId || req.query.messageId) as string | undefined;
   if (req.user && requestedClientId && req.user.role !== 'admin' && requestedClientId !== req.user.clientId && requestedClientId !== 'me') {
     return res.status(403).json({ error: 'Acesso negado para outro cliente.', code: 'IDOR_FORBIDDEN' });
   }
@@ -123,6 +125,8 @@ apiRouter.all('/chat/message/stream', optionalAuthMiddleware, async (req: Reques
   res.setHeader('Connection', 'keep-alive');
   res.setHeader('X-Accel-Buffering', 'no');
   res.flushHeaders?.();
+  res.isSse = true;
+  registerSseResponse(res);
 
   /** Emite um evento SSE nomeado com payload JSON. */
   const sseSend = (event: string, data: Record<string, unknown>): void => {

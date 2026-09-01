@@ -4,7 +4,7 @@ import { createApp } from '../src/app.js';
 import { jwtService } from '../src/modules/auth/jwt.service.js';
 import { aiService } from '../src/modules/ai/ai.service.js';
 import { ixcService } from '../src/modules/ixc/ixc.service.js';
-import { chatService, chatIdempotency } from '../src/modules/chat/chat.service.js';
+import { ChatService, chatService, chatIdempotency } from '../src/modules/chat/chat.service.js';
 import { chatRepository } from '../src/modules/chat/chat.repository.js';
 
 const app = createApp();
@@ -180,6 +180,32 @@ describe('⚡ Streaming honesto do chat: protocolo SSE, idempotência e abuso de
     expect(persistedProtocolAnswers.length).toBe(1);
   });
 
+  it('deve aceitar clientMessageId do app tanto no stream quanto no fallback síncrono', async () => {
+    const sid = 'stream-client-message-id-alias';
+    const clientMessageId = 'mobile-client-message-id-1';
+    const payload = {
+      message: 'Quero contratar um plano de internet',
+      sessionId: sid,
+      clientId: '2270',
+      clientMessageId,
+    };
+
+    const streamRes = await request(app)
+      .post('/api/chat/message/stream')
+      .set('Authorization', `Bearer ${token}`)
+      .send(payload);
+    const streamDone = parseSseEvents(streamRes.text).find((event) => event.event === 'done');
+
+    const retryRes = await request(app)
+      .post('/api/chat/message')
+      .set('Authorization', `Bearer ${token}`)
+      .send(payload);
+
+    expect(streamRes.status).toBe(200);
+    expect(retryRes.status).toBe(200);
+    expect(retryRes.body.id).toBe(streamDone?.data?.message?.id);
+  });
+
   it('requisições concorrentes com o mesmo messageId compartilham a mesma execução (single-flight)', async () => {
     let ticketCalls = 0;
     (ixcService as any).createTicket = async (...args: unknown[]) => {
@@ -209,6 +235,44 @@ describe('⚡ Streaming honesto do chat: protocolo SSE, idempotência e abuso de
     const doneB = parseSseEvents(resB.text).find((e) => e.event === 'done');
     expect(doneA?.data?.message?.id).toBeTruthy();
     expect(doneB?.data?.message?.id).toBe(doneA?.data?.message?.id);
+  });
+
+  it('mantém idempotência quando o retry chega em outra instância do serviço', async () => {
+    let classifyCalls = 0;
+    let releaseClassification!: () => void;
+    let enteredClassification!: () => void;
+    const classificationEntered = new Promise<void>((resolve) => { enteredClassification = resolve; });
+    const classificationReleased = new Promise<void>((resolve) => { releaseClassification = resolve; });
+    (aiService as any).classifyMessage = async () => {
+      classifyCalls += 1;
+      enteredClassification();
+      await classificationReleased;
+      return {
+        department: 'GERAL',
+        confidence: 0.99,
+        intent: 'SAUDACAO',
+        friendlyMessage: 'Olá! Como posso ajudar?',
+        suggestedAction: 'NONE',
+        aiProvider: 'heuristic',
+      };
+    };
+
+    const sid = 'stream-idem-cross-instance-1';
+    const messageId = 'cross-instance-message-1';
+    const firstService = new ChatService();
+    const secondService = new ChatService();
+    const firstPromise = firstService.processMessage(sid, 'Olá', '2270', { clientMessageId: messageId });
+    await classificationEntered;
+
+    // Separate workers do not share the in-process guard.
+    chatIdempotency.reset();
+    const secondPromise = secondService.processMessage(sid, 'Olá', '2270', { clientMessageId: messageId });
+    releaseClassification();
+
+    const [first, second] = await Promise.all([firstPromise, secondPromise]);
+    expect(classifyCalls).toBe(1);
+    expect(second.id).toBe(first.id);
+    expect((await chatService.getSessionHistory(sid)).filter((message) => message.sender === 'USER')).toHaveLength(1);
   });
 
   it('/ai/classify rejeita mensagem acima de 2000 caracteres com 413 em português (anti-abuso de custo)', async () => {

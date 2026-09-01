@@ -11,6 +11,10 @@ export interface OutboxEntry {
   createdAt: string;
   /** Número de tentativas de reenvio já feitas. */
   attempts: number;
+  /** Customer identity that originated the message; required for safe flush. */
+  clientId: string;
+  /** Stable id shared with the backend idempotency key. */
+  clientMessageId: string;
 }
 
 const STORAGE_KEY = '@dbs/outbox/chat';
@@ -54,7 +58,17 @@ async function readAll(): Promise<OutboxEntry[]> {
   try {
     const raw = await store.getItem(STORAGE_KEY);
     const parsed = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? (parsed as OutboxEntry[]) : [];
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((entry): entry is OutboxEntry => Boolean(
+      entry && typeof entry === 'object' &&
+      typeof entry.id === 'string' &&
+      typeof entry.sessionId === 'string' &&
+      typeof entry.clientId === 'string' && entry.clientId.trim() &&
+      typeof entry.clientMessageId === 'string' && entry.clientMessageId.trim() &&
+      typeof entry.text === 'string' &&
+      typeof entry.createdAt === 'string' &&
+      Number.isFinite(entry.attempts)
+    ));
   } catch {
     // JSON corrompido: recomeça vazio em vez de travar o chat para sempre.
     return [];
@@ -67,19 +81,31 @@ async function writeAll(entries: OutboxEntry[]): Promise<void> {
   await store.setItem(STORAGE_KEY, JSON.stringify(entries));
 }
 
+function requireClientId(clientId: string, operation: string): string {
+  const normalized = clientId.trim();
+  if (!normalized) throw new Error(`clientId é obrigatório para ${operation}.`);
+  return normalized;
+}
+
 /** Adiciona uma mensagem à fila persistente. */
 export async function enqueue(
   sessionId: string,
   text: string,
-  now = new Date()
+  now = new Date(),
+  metadata: { clientId?: string; clientMessageId?: string } = {}
 ): Promise<OutboxEntry> {
+  const clientId = metadata.clientId?.trim();
+  if (!clientId) throw new Error('clientId é obrigatório para enfileirar uma mensagem.');
   const entries = await readAll();
+  const id = makeId();
   const entry: OutboxEntry = {
-    id: makeId(),
+    id,
     sessionId,
     text,
     createdAt: now.toISOString(),
     attempts: 0,
+    clientId,
+    clientMessageId: metadata.clientMessageId?.trim() || id,
   };
   entries.push(entry);
   await writeAll(entries);
@@ -87,24 +113,31 @@ export async function enqueue(
 }
 
 /** Lista todas as mensagens pendentes (ordem de envio). */
-export async function list(): Promise<OutboxEntry[]> {
-  return readAll();
+export async function list(clientId: string): Promise<OutboxEntry[]> {
+  const scopedClientId = requireClientId(clientId, 'listar a outbox');
+  const entries = await readAll();
+  return entries.filter((entry) => entry.clientId === scopedClientId);
 }
 
 /** Remove uma entrada pelo id após reenvio bem-sucedido. */
-export async function remove(id: string): Promise<void> {
+export async function remove(id: string, clientId: string): Promise<void> {
+  const scopedClientId = requireClientId(clientId, 'remover uma entrada da outbox');
   const entries = await readAll();
-  await writeAll(entries.filter((entry) => entry.id !== id));
+  await writeAll(entries.filter((entry) => entry.id !== id || entry.clientId !== scopedClientId));
 }
 
 /**
  * Incrementa tentativas; ao atingir o limite (`cap`, default 3), marca como
- * falha definitiva e retorna true para que o chamador descarte/toaste.
+ * falha definitiva e retorna true para que o chamador mostre um aviso. A
+ * entrada permanece armazenada até uma entrega ou remoção explícita.
  */
-export async function markFailed(id: string, cap: number = MAX_RETRIES): Promise<boolean> {
+export async function markFailed(id: string, clientId: string, cap: number = MAX_RETRIES): Promise<boolean> {
+  const scopedClientId = requireClientId(clientId, 'contar uma falha');
   const entries = await readAll();
   const next = entries.map((entry) =>
-    entry.id === id ? { ...entry, attempts: entry.attempts + 1 } : entry
+    entry.id === id && entry.clientId === scopedClientId
+      ? { ...entry, attempts: Math.min(cap, entry.attempts + 1) }
+      : entry
   );
   await writeAll(next);
   const updated = next.find((entry) => entry.id === id);
@@ -118,26 +151,29 @@ export async function markFailed(id: string, cap: number = MAX_RETRIES): Promise
  *
  * Interrompe a rodada na primeira falha (um outage queimaria todas as
  * tentativas de uma vez) e retorna os ids entregues e os que esgotaram
- * tentativas nesta rodada (para toast único).
+ * tentativas nesta rodada (para toast único). Entradas esgotadas permanecem
+ * armazenadas para recuperação/remoção explícita, mas não são reenviadas.
  */
 export async function flush(
   send: (entry: OutboxEntry) => Promise<unknown>,
-  options: { maxRetries?: number } = {}
+  options: { maxRetries?: number; clientId: string }
 ): Promise<{ delivered: string[]; permanentlyFailed: OutboxEntry[] }> {
   const maxRetries = options.maxRetries ?? MAX_RETRIES;
+  const clientId = requireClientId(options.clientId, 'reenviar a outbox');
   const delivered: string[] = [];
   const permanentlyFailed: OutboxEntry[] = [];
 
-  for (const entry of await list()) {
+  for (const entry of await list(clientId)) {
+    if (entry.attempts >= maxRetries) continue;
     try {
       await send(entry);
       delivered.push(entry.id);
-      await remove(entry.id);
+      await remove(entry.id, clientId);
     } catch {
-      const exhausted = await markFailed(entry.id, maxRetries);
+      const exhausted = await markFailed(entry.id, clientId, maxRetries);
       if (exhausted) {
-        permanentlyFailed.push(entry);
-        await remove(entry.id);
+        const updated = (await list(clientId)).find((candidate) => candidate.id === entry.id);
+        permanentlyFailed.push(updated || { ...entry, attempts: maxRetries });
       }
       break;
     }

@@ -106,7 +106,17 @@ export class UserRepository {
   }
 
   async markOtpUsed(id: string): Promise<void> {
-    await getDatabase().prepare(`UPDATE otp_codes SET used = 1 WHERE id = ?`).run(id);
+    await getDatabase().prepare(`UPDATE otp_codes SET used = 1 WHERE id = ? AND used = 0`).run(id);
+  }
+
+  /** Claims a verified OTP row with a compare-and-swap update. */
+  async claimOtp(id: string, identifier: string, now = Date.now()): Promise<boolean> {
+    const result = await getDatabase().prepare(`
+      UPDATE otp_codes
+      SET used = 1
+      WHERE id = ? AND identifier = ? AND used = 0 AND expires_at > ? AND attempts < 5
+    `).run(id, identifier, now);
+    return result.changes === 1;
   }
 
   async clearAll(): Promise<void> {

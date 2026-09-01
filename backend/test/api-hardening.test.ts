@@ -53,6 +53,15 @@ describe('🛡️ Suite de Endurecimento da API (limiters, health, fila, revoga�
       expect(res.body.ai).toBeUndefined();
     });
 
+    it('marca o catálogo servido em modo demo como DEMO, nunca LIVE', async () => {
+      const res = await request(app).get('/api/commercial/plans');
+
+      expect(res.status).toBe(200);
+      expect(res.body.dataState).toBe('DEMO');
+      expect(res.body.plans.length).toBeGreaterThan(0);
+      expect(res.body.plans.every((plan: { dataState?: string }) => plan.dataState === 'DEMO')).toBe(true);
+    });
+
     it('GET /api/health/ready exige autenticação', async () => {
       const res = await request(app).get('/api/health/ready');
       expect(res.status).toBe(401);
@@ -69,6 +78,23 @@ describe('🛡️ Suite de Endurecimento da API (limiters, health, fila, revoga�
       expect([200, 503]).toContain(res.status);
       expect(res.body.dependencies).toBeDefined();
       expect(JSON.stringify(res.body)).not.toContain('baseUrl');
+    });
+
+    it('fica degraded quando o banco responde, mas o IXC está sem credencial utilizável', async () => {
+      const previousDemoMode = CONFIG.demoMode;
+      const previousToken = CONFIG.ixc.token;
+      CONFIG.demoMode = false;
+      CONFIG.ixc.token = '';
+      try {
+        const res = await request(app).get('/api/health/ready').set(authHeaders(adminToken));
+        expect(res.status).toBe(503);
+        expect(res.body.status).toBe('degraded');
+        expect(res.body.dependencies.postgres).toBe(true);
+        expect(res.body.dependencies.ixc).toBe(false);
+      } finally {
+        CONFIG.demoMode = previousDemoMode;
+        CONFIG.ixc.token = previousToken;
+      }
     });
   });
 

@@ -323,7 +323,8 @@ export function buildDemoReferralSummary(clientId: string): ReferralSummary {
   return {
     clientId,
     referralCode: `DBS-${clientId.replace(/\D/g, '') || '0000'}`,
-    referralLink: `https://dbstelecom.com.br/indique/${clientId}`,
+    // A local fixture must never look like a real, shareable referral URL.
+    referralLink: '',
     totalReferred: 2,
     activeDiscounts: 1,
     totalSaved: 119.9,

@@ -36,6 +36,18 @@ export interface AuthResponse {
   contracts?: Contract[];
 }
 
+/** Minimal PII returned by the authenticated identification endpoint. */
+export interface IdentifiedCustomer {
+  nome: string;
+  cpfCnpjMascarado: string;
+}
+
+export interface IdentifyResponse {
+  found: boolean;
+  client?: IdentifiedCustomer;
+  message?: string;
+}
+
 export type ApiDataState = 'LIVE' | 'UNAVAILABLE' | 'UNAUTHORIZED' | 'DEMO';
 
 export interface Contract {

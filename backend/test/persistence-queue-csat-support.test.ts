@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { getDatabase } from '../src/database/db.js';
-import { queueService } from '../src/modules/queue/queue.service.js';
+import { QueueService, queueService } from '../src/modules/queue/queue.service.js';
 import { queueRepository } from '../src/modules/queue/queue.repository.js';
 import { csatService } from '../src/modules/csat/csat.service.js';
 import { csatRepository } from '../src/modules/csat/csat.repository.js';
@@ -15,6 +15,16 @@ describe('💾 Suite de Persistência PostgreSQL: Fila Virtual, CSAT e Suporte',
   });
 
   describe('👤 1. Fila Virtual de Atendimento (queue_entries)', () => {
+    it('retorna posições calculadas e ordenadas pela janela ROW_NUMBER', async () => {
+      await queueService.joinQueue({ sessionId: 'rank-1', clientId: 'rank-client-1', department: 'SUPORTE' });
+      await queueService.joinQueue({ sessionId: 'rank-2', clientId: 'rank-client-2', department: 'SUPORTE' });
+
+      const ranked = await queueRepository.getQueuedByDepartmentRanked('SUPORTE');
+      expect(ranked).toHaveLength(2);
+      expect(ranked.map((entry) => entry.position)).toEqual([1, 2]);
+      expect(ranked.map((entry) => entry.clientId)).toEqual(['rank-client-1', 'rank-client-2']);
+    });
+
     it('deve persistir a entrada na fila no PostgreSQL e consultar com sucesso', async () => {
       const entry = await queueService.joinQueue({
         sessionId: 'session-persist-01',
@@ -79,6 +89,33 @@ describe('💾 Suite de Persistência PostgreSQL: Fila Virtual, CSAT e Suporte',
 
       const inDb = await queueRepository.getByClientOrSession('2272');
       expect(inDb?.status).toBe('CANCELLED');
+    });
+
+    it('deve admitir apenas uma entrada ativa quando duas instâncias concorrem pelo mesmo cliente', async () => {
+      const firstInstance = new QueueService();
+      const secondInstance = new QueueService();
+
+      const [first, second] = await Promise.all([
+        firstInstance.joinQueue({
+          sessionId: 'race-session-a',
+          clientId: 'queue-race-client',
+          clientName: 'Cliente Concorrente',
+          department: 'SUPORTE',
+        }),
+        secondInstance.joinQueue({
+          sessionId: 'race-session-b',
+          clientId: 'queue-race-client',
+          clientName: 'Cliente Concorrente',
+          department: 'SUPORTE',
+        }),
+      ]);
+
+      const active = (await queueRepository.getAll()).filter(
+        (entry) => entry.clientId === 'queue-race-client' &&
+          ['QUEUED', 'ASSIGNED', 'IN_SERVICE'].includes(entry.status)
+      );
+      expect(active).toHaveLength(1);
+      expect(new Set([first.queueId, second.queueId]).size).toBe(1);
     });
   });
 
@@ -157,6 +194,37 @@ describe('💾 Suite de Persistência PostgreSQL: Fila Virtual, CSAT e Suporte',
       const matched = tickets.find((t) => t.protocolo === escalated.protocolo);
       expect(matched).toBeDefined();
       expect(matched?.statusLabel).toBeDefined();
+    });
+
+    it('não cria outro chamado quando o diagnóstico escalado é repetido', async () => {
+      await supportService.startDiagnostic('repeat-client');
+      await supportService.processDiagnosticStep('repeat-client', 'todos aparelhos');
+      await supportService.processDiagnosticStep('repeat-client', 'cabos ok');
+
+      const first = await supportService.processDiagnosticStep('repeat-client', 'não, ainda continua');
+      const second = await supportService.processDiagnosticStep('repeat-client', 'não, ainda continua');
+
+      expect(first.step).toBe('ESCALATED');
+      expect(second.step).toBe('ESCALATED');
+      expect(second.protocolo).toBe(first.protocolo);
+      const tickets = await supportService.getClientTickets('repeat-client');
+      expect(tickets.filter((ticket) => ticket.protocolo === first.protocolo)).toHaveLength(1);
+    });
+
+    it('serializa escalonamentos concorrentes por cliente', async () => {
+      await supportService.startDiagnostic('concurrent-client');
+      await supportService.processDiagnosticStep('concurrent-client', 'todos aparelhos');
+      await supportService.processDiagnosticStep('concurrent-client', 'cabos ok');
+
+      const results = await Promise.all([
+        supportService.processDiagnosticStep('concurrent-client', 'não, continua lento'),
+        supportService.processDiagnosticStep('concurrent-client', 'não, continua lento'),
+      ]);
+
+      expect(results[0].protocolo).toBeDefined();
+      expect(results[1].protocolo).toBe(results[0].protocolo);
+      const tickets = await supportService.getClientTickets('concurrent-client');
+      expect(tickets.filter((ticket) => ticket.protocolo === results[0].protocolo)).toHaveLength(1);
     });
   });
 });

@@ -1,6 +1,26 @@
 import { Router, type Request, type Response } from 'express';
 import { authMiddleware, requireAdmin } from '../middlewares/auth.middleware.js';
 import { getDatabase } from '../database/db.js';
+import { CONFIG, isPlaceholderSecret } from '../config/env.js';
+
+function isIxcReady(): boolean {
+  if (CONFIG.demoMode) return true;
+  try {
+    const url = new URL(CONFIG.ixc.baseUrl);
+    return (url.protocol === 'https:' || url.protocol === 'http:') && !isPlaceholderSecret(CONFIG.ixc.token);
+  } catch {
+    return false;
+  }
+}
+
+function isAiReady(): boolean {
+  if (CONFIG.demoMode || CONFIG.ai.provider === 'mock') return true;
+  const geminiReady = !isPlaceholderSecret(CONFIG.ai.geminiApiKey);
+  const openaiReady = !isPlaceholderSecret(CONFIG.ai.openaiApiKey);
+  if (CONFIG.ai.provider === 'gemini') return geminiReady;
+  if (CONFIG.ai.provider === 'openai') return openaiReady;
+  return geminiReady && openaiReady;
+}
 
 /**
  * Liveness: responde 200 se o processo está de pé. Intencionalmente NÃO
@@ -30,12 +50,18 @@ export function registerHealthRoutes(apiRouter: Router): void {
       console.error('[Health] PostgreSQL/Neon indisponível:', error);
     }
 
-    // Sem baseUrl do IXC, sem feature flags, sem detalhes do motor de IA:
-    // apenas o estado agregado das dependências para operação.
-    return res.status(postgresConnected ? 200 : 503).json({
-      status: postgresConnected ? 'ready' : 'degraded',
+    const ixcConfigured = isIxcReady();
+    const aiConfigured = isAiReady();
+    const ready = postgresConnected && ixcConfigured && aiConfigured;
+
+    // Sem baseUrl, tokens, feature flags ou detalhes do motor de IA:
+    // apenas flags agregadas das dependências necessárias para operar.
+    return res.status(ready ? 200 : 503).json({
+      status: ready ? 'ready' : 'degraded',
       dependencies: {
         postgres: postgresConnected,
+        ixc: ixcConfigured,
+        ai: aiConfigured,
       },
       timestamp: new Date().toISOString(),
     });

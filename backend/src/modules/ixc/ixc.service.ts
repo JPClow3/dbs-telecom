@@ -240,10 +240,59 @@ export class IXCService {
       sortorder: 'asc',
     });
 
-    // Filtra faturas em aberto ('A') ou todas se solicitadas
-    const filtered = res.registros.filter((inv) => inv.status === 'A' || inv.status === undefined);
+    // Keep paid rows too: local PIX reconciliation and the ERP must converge
+    // on the same customer-facing invoice status.
+    const filtered = res.registros.filter((inv) => inv.status === 'A' || inv.status === 'R' || inv.status === undefined);
     ixcCache.set(cacheKey, filtered, 60);
     return filtered;
+  }
+
+  /** Marks an accounts-receivable invoice as received in IXC. */
+  async updateInvoicePayment(invoiceId: string, input: { paidAt: string; amount: string }): Promise<{
+    success: boolean;
+    providerId?: string;
+    simulated?: boolean;
+  }> {
+    const endpoint = 'fn_areceber';
+    if (CONFIG.demoMode && !CONFIG.ixc.token) {
+      return { success: true, simulated: true };
+    }
+    if (!CONFIG.demoMode && !CONFIG.ixc.token) {
+      throw this.unavailable(endpoint, 'IXC_TOKEN não configurado');
+    }
+
+    try {
+      const response = await fetch(`${this.baseUrl}/${endpoint}`, {
+        method: 'POST',
+        headers: {
+          Authorization: this.authHeader,
+          'Content-Type': 'application/json',
+          ixcsoft: 'alterar',
+        },
+        signal: AbortSignal.timeout(3500),
+        body: JSON.stringify({
+          id: invoiceId,
+          status: 'R',
+          data_recebimento: input.paidAt,
+          valor_recebido: input.amount,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP Error IXC ${response.status}: ${response.statusText}`);
+      }
+      const data: any = await response.json().catch(() => ({}));
+      const providerId = data.id ?? data.registro?.id ?? data.protocolo;
+      if (!providerId || data.success === false ||
+        ['error', 'falha', 'failure'].includes(String(data.status || data.resultado || '').toLowerCase())) {
+        throw this.unavailable(endpoint, 'resposta sem confirmação da baixa');
+      }
+      ixcCache.invalidateClient(data.id_cliente || '');
+      return { success: true, providerId: providerId ? String(providerId) : undefined };
+    } catch (error) {
+      if (error instanceof IXCUnavailableError) throw error;
+      throw this.unavailable(endpoint, error);
+    }
   }
 
   /**
@@ -280,6 +329,7 @@ export class IXCService {
         headers: {
           'Authorization': this.authHeader,
           'Content-Type': 'application/json',
+          'ixcsoft': 'inserir',
         },
         signal: AbortSignal.timeout(3500),
         body: JSON.stringify({
@@ -294,8 +344,12 @@ export class IXCService {
 
       if (response.ok) {
         const data: any = await response.json().catch(() => ({}));
+        // A generic success/status flag is not a durable acknowledgement of a
+        // created ticket. Require the provider's ticket id or protocol before
+        // exposing a confirmed result to the client.
         const providerId = data.id ?? data.registro?.id ?? data.protocolo;
-        if (!providerId && data.success !== true) {
+        if (!providerId || data.success === false ||
+          ['error', 'falha', 'failure'].includes(String(data.status || data.resultado || '').toLowerCase())) {
           throw this.unavailable('su_oss_chamado', 'resposta sem confirmação do ERP');
         }
         ixcCache.invalidateClient(ticket.id_cliente);

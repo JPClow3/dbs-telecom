@@ -75,12 +75,12 @@ function resolvePlatformOs(): string {
 }
 
 export function getApiUrl(): string {
+  const envUrl = (process.env as Record<string, string | undefined>)?.EXPO_PUBLIC_API_URL?.trim();
+  if (envUrl) {
+    return envUrl.replace(/\/+$/, '');
+  }
   if (typeof window !== 'undefined' && window.location && window.location.origin) {
     return `${window.location.origin}/api`;
-  }
-  const envUrl = (process.env as Record<string, string | undefined>)?.EXPO_PUBLIC_API_URL;
-  if (envUrl) {
-    return envUrl;
   }
   if (!__DEV__) {
     return productionApiUrl;
@@ -202,7 +202,13 @@ export async function apiFetch(url: string, options: ApiFetchOptions = {}): Prom
     ? null
     : createTimeoutSignal(timeoutMs ?? DEFAULT_TIMEOUT_MS);
 
-  const { signal, cleanup } = combineSignals(callerSignal, timeoutHandle);
+  // Long-lived streams must keep the caller's abort signal attached after
+  // fetch resolves its headers; otherwise unsubscribe/idle cancellation would
+  // never reach the response body reader. Finite requests still use the
+  // combined controller so the timeout can be cleaned up immediately.
+  const { signal, cleanup } = noTimeout && callerSignal
+    ? { signal: callerSignal, cleanup: () => undefined }
+    : combineSignals(callerSignal, timeoutHandle);
 
   try {
     const res = await fetch(url, { ...rest, signal });

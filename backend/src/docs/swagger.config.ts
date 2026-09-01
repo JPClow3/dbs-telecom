@@ -613,7 +613,7 @@ Este backend integra o aplicativo móvel do cliente com o **ERP IXC Soft WebServ
           found: { type: 'boolean', example: true },
           authenticated: { type: 'boolean', example: true },
           token: { type: 'string', example: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...', description: 'Token JWT para autorização' },
-          expiresIn: { type: 'string', example: '7d' },
+          expiresIn: { type: 'string', example: '24h' },
           client: { $ref: '#/components/schemas/Customer' },
           contracts: { type: 'array', items: { type: 'object' } },
         },

@@ -17,6 +17,15 @@ function maskCpfCnpj(doc: string): string {
   return `***.${digits.slice(-6, -3)}.***-${digits.slice(-2)}`;
 }
 
+function normalizeCpfCnpj(doc: string): string {
+  return String(doc || '').replace(/\D/g, '');
+}
+
+function getObjectBody(req: Request): Record<string, any> {
+  const body = req.body;
+  return body && typeof body === 'object' && !Array.isArray(body) ? body : {};
+}
+
 /** Limiter dedicado do /auth/identify: 5 requisições por minuto por IP. */
 const identifyLimiter = rateLimit({
   windowMs: 60 * 1000,
@@ -39,9 +48,9 @@ export function registerAuthRoutes(apiRouter: Router): void {
    *
    * Anti-enumeracao: "CPF desconhecido" e "senha incorreta" retornam o MESMO
    * corpo (found:false + mensagem genérica) e o MESMO status 401.
-   */
+  */
   apiRouter.post('/auth/login', async (req: Request, res: Response) => {
-    const { cpfCnpj, login, password } = req.body;
+    const { cpfCnpj, login, password } = getObjectBody(req);
     const doc = cpfCnpj || login;
 
     if (!doc) {
@@ -87,7 +96,7 @@ export function registerAuthRoutes(apiRouter: Router): void {
         mode: CONFIG.demoMode ? 'demo' : 'live',
         dataState: CONFIG.demoMode ? 'DEMO' : 'LIVE',
         token,
-        expiresIn: '24h',
+        expiresIn: CONFIG.auth.jwtExpiresIn,
         client: {
           id: client.id,
           nome: client.razao,
@@ -110,7 +119,8 @@ export function registerAuthRoutes(apiRouter: Router): void {
    * CPF/CNPJ como usuário e senha padrão.
    */
   apiRouter.post('/auth/sync-users', authMiddleware, requireAdmin, async (req: Request, res: Response) => {
-    const limit = parseInt(String(req.query.limit || req.body.limit || '50'), 10);
+    const requestedLimit = Number.parseInt(String(req.query.limit || getObjectBody(req).limit || '50'), 10);
+    const limit = Number.isFinite(requestedLimit) ? Math.min(100, Math.max(1, requestedLimit)) : 50;
     try {
       const syncResult = await userService.syncUsersFromIXC(limit);
       const credentials = (syncResult as any).credentials;
@@ -147,7 +157,7 @@ export function registerAuthRoutes(apiRouter: Router): void {
    * os tokens JWT anteriores deixam de ser aceitos.
    */
   apiRouter.post('/auth/change-password', authMiddleware, enforceAntiIdor('clientId'), async (req: Request, res: Response) => {
-    const { clientId, oldPassword, newPassword } = req.body;
+    const { clientId, oldPassword, newPassword } = getObjectBody(req);
     const targetClientId = clientId || req.user?.clientId;
 
     if (!targetClientId || !oldPassword || !newPassword) {
@@ -185,9 +195,9 @@ export function registerAuthRoutes(apiRouter: Router): void {
    *
    * Fora do modo demo o canal de entrega não existe: 501 NOT_IMPLEMENTED
    * (condição permanente, não-retentável) em vez de 503 (falha transitória).
-   */
+  */
   apiRouter.post('/auth/otp/request', async (req: Request, res: Response) => {
-    const { identifier, channel } = req.body;
+    const { identifier, channel } = getObjectBody(req);
     if (!identifier) {
       return res.status(400).json({ error: 'Informe o CPF, CNPJ ou identificador para envio do código OTP.' });
     }
@@ -212,9 +222,9 @@ export function registerAuthRoutes(apiRouter: Router): void {
 
   /**
    * Validação do Código OTP e Emissão de Token JWT
-   */
+  */
   apiRouter.post('/auth/otp/verify', async (req: Request, res: Response) => {
-    const { identifier, code } = req.body;
+    const { identifier, code } = getObjectBody(req);
     if (!identifier || !code) {
       return res.status(400).json({ error: 'Informe o identificador e o código OTP de 6 dígitos.' });
     }
@@ -240,7 +250,7 @@ export function registerAuthRoutes(apiRouter: Router): void {
       return res.json({
         authenticated: true,
         token,
-        expiresIn: '24h',
+        expiresIn: CONFIG.auth.jwtExpiresIn,
         client: {
           id: client.id,
           nome: client.razao,
@@ -267,12 +277,21 @@ export function registerAuthRoutes(apiRouter: Router): void {
    * contratos por CPF puro). Mesmo autenticado, a resposta fica reduzida ao
    * mínimo necessário: confirmação de titularidade (nome + CPF mascarado).
    * Nada de e-mail, telefone, endereço, id ou contratos.
-   */
+  */
   apiRouter.post('/auth/identify', authMiddleware, identifyLimiter, async (req: Request, res: Response) => {
-    const { cpfCnpj } = req.body;
+    const { cpfCnpj } = getObjectBody(req);
 
     if (!cpfCnpj) {
       return res.status(400).json({ error: 'Informe o CPF ou CNPJ para identificação.' });
+    }
+
+    // A successful lookup returns identifying PII. A client may confirm only
+    // its own document; administrators retain the explicit lookup capability.
+    if (req.user?.role !== 'admin' && normalizeCpfCnpj(cpfCnpj) !== normalizeCpfCnpj(req.user?.cpfCnpj || '')) {
+      return res.status(403).json({
+        error: 'Acesso negado: a identificação só pode consultar o documento da sessão atual.',
+        code: 'IDOR_FORBIDDEN',
+      });
     }
 
     try {

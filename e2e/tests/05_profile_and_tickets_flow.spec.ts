@@ -69,15 +69,13 @@ test.describe('👤 5. Profile, Diagnostics, Tickets & Logout Flow', () => {
 
     // Testa cópia de protocolo
     const copyProtocolBtn = page.getByText('Copiar Protocolo').first();
-    if (await copyProtocolBtn.isVisible()) {
-      await copyProtocolBtn.click();
-    }
+    await expect(copyProtocolBtn).toBeVisible();
+    await copyProtocolBtn.click();
 
     // Fecha o modal
     const closeBtn = page.getByTestId('close-tickets-modal-btn');
-    if (await closeBtn.isVisible()) {
-      await closeBtn.click();
-    }
+    await expect(closeBtn).toBeVisible();
+    await closeBtn.click();
   });
 
   test('deve identificar o teste de velocidade como prévia no ambiente demo', async ({ page }) => {
