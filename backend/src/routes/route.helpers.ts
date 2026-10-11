@@ -1,5 +1,14 @@
 import type { NextFunction, Request, Response } from 'express';
 
+/** These API routes use named scalar parameters, rather than wildcard arrays. */
+export function routeParam(req: Request, name: string): string {
+  const value = req.params[name];
+  if (typeof value !== 'string') {
+    throw Object.assign(new Error('Parâmetro de rota inválido.'), { status: 400 });
+  }
+  return value;
+}
+
 /**
  * Códigos de erro que podem ser ecoados ao cliente com segurança. Qualquer
  * outro código (ex.: códigos internos de drivers de banco, mensagens de

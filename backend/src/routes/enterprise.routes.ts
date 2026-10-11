@@ -8,7 +8,7 @@ import { referralService } from '../modules/referral/referral.service.js';
 import { financialService } from '../modules/financial/financial.service.js';
 import { authMiddleware, enforceAntiIdor, requireAdmin, verifyAuthenticatedToken } from '../middlewares/auth.middleware.js';
 import { registerSseResponse } from '../app.js';
-import { sendApiError } from './route.helpers.js';
+import { routeParam, sendApiError } from './route.helpers.js';
 
 function requireDemoAdapter(res: Response, feature: string): boolean {
   if (CONFIG.demoMode) return true;
@@ -47,7 +47,7 @@ export function registerEnterpriseRoutes(apiRouter: Router): void {
 apiRouter.get('/wifi/settings/:clientId', authMiddleware, enforceAntiIdor(), async (req: Request, res: Response) => {
   if (!requireDemoAdapter(res, 'Gerenciamento Wi-Fi/TR-069')) return;
   try {
-    const clientId = req.params.clientId === 'me' ? (req.user?.clientId as string) : req.params.clientId;
+    const clientId = routeParam(req, "clientId") === 'me' ? (req.user?.clientId as string) : routeParam(req, "clientId");
     const settings = await wifiService.getWifiSettings(clientId);
     return res.json({ ...settings, simulated: true, dataState: 'DEMO' });
   } catch (error: any) {
@@ -61,7 +61,7 @@ apiRouter.get('/wifi/settings/:clientId', authMiddleware, enforceAntiIdor(), asy
 apiRouter.put('/wifi/settings/:clientId', authMiddleware, enforceAntiIdor(), async (req: Request, res: Response) => {
   if (!requireDemoAdapter(res, 'Gerenciamento Wi-Fi/TR-069')) return;
   try {
-    const clientId = req.params.clientId === 'me' ? (req.user?.clientId as string) : req.params.clientId;
+    const clientId = routeParam(req, "clientId") === 'me' ? (req.user?.clientId as string) : routeParam(req, "clientId");
     const updated = await wifiService.updateWifiSettings(clientId, req.body);
     return res.json({ ...updated, simulated: true, dataState: 'DEMO' });
   } catch (error: any) {
@@ -75,7 +75,7 @@ apiRouter.put('/wifi/settings/:clientId', authMiddleware, enforceAntiIdor(), asy
 apiRouter.get('/wifi/qr/:clientId', authMiddleware, enforceAntiIdor(), async (req: Request, res: Response) => {
   if (!requireDemoAdapter(res, 'Gerenciamento Wi-Fi/TR-069')) return;
   try {
-    const clientId = req.params.clientId === 'me' ? (req.user?.clientId as string) : req.params.clientId;
+    const clientId = routeParam(req, "clientId") === 'me' ? (req.user?.clientId as string) : routeParam(req, "clientId");
     const qrData = await wifiService.getGuestQrCode(clientId);
     return res.json({ ...qrData, simulated: true, dataState: 'DEMO' });
   } catch (error: any) {
@@ -89,7 +89,7 @@ apiRouter.get('/wifi/qr/:clientId', authMiddleware, enforceAntiIdor(), async (re
 apiRouter.post('/wifi/restart/:clientId', authMiddleware, enforceAntiIdor(), async (req: Request, res: Response) => {
   if (!requireDemoAdapter(res, 'Gerenciamento Wi-Fi/TR-069')) return;
   try {
-    const clientId = req.params.clientId === 'me' ? (req.user?.clientId as string) : req.params.clientId;
+    const clientId = routeParam(req, "clientId") === 'me' ? (req.user?.clientId as string) : routeParam(req, "clientId");
     const result = await wifiService.restartWifi(clientId);
     return res.json({ ...result, simulated: true, dataState: 'DEMO' });
   } catch (error: any) {
@@ -107,7 +107,7 @@ apiRouter.post('/wifi/restart/:clientId', authMiddleware, enforceAntiIdor(), asy
 apiRouter.get('/optical/diagnostics/:clientId', authMiddleware, enforceAntiIdor(), async (req: Request, res: Response) => {
   if (!requireDemoAdapter(res, 'Telemetria óptica')) return;
   try {
-    const clientId = req.params.clientId === 'me' ? (req.user?.clientId as string) : req.params.clientId;
+    const clientId = routeParam(req, "clientId") === 'me' ? (req.user?.clientId as string) : routeParam(req, "clientId");
     const simulatedRx = req.query.rx ? parseFloat(req.query.rx as string) : undefined;
     const result = await opticalService.checkOpticalPower(clientId, simulatedRx);
     return res.json({ ...result, simulated: true, dataState: 'DEMO' });
@@ -125,7 +125,7 @@ apiRouter.get('/optical/diagnostics/:clientId', authMiddleware, enforceAntiIdor(
  */
 apiRouter.get('/notifications/:clientId', authMiddleware, enforceAntiIdor(), async (req: Request, res: Response) => {
   try {
-    const clientId = req.params.clientId === 'me' ? (req.user?.clientId as string) : req.params.clientId;
+    const clientId = routeParam(req, "clientId") === 'me' ? (req.user?.clientId as string) : routeParam(req, "clientId");
     const notifications = await notificationsService.getUserNotifications(clientId);
     return res.json(notifications);
   } catch (error: any) {
@@ -138,8 +138,8 @@ apiRouter.get('/notifications/:clientId', authMiddleware, enforceAntiIdor(), asy
  */
 apiRouter.patch('/notifications/:clientId/read/:notificationId', authMiddleware, enforceAntiIdor(), async (req: Request, res: Response) => {
   try {
-    const clientId = req.params.clientId === 'me' ? (req.user?.clientId as string) : req.params.clientId;
-    const success = await notificationsService.markAsRead(clientId, req.params.notificationId);
+    const clientId = routeParam(req, "clientId") === 'me' ? (req.user?.clientId as string) : routeParam(req, "clientId");
+    const success = await notificationsService.markAsRead(clientId, routeParam(req, "notificationId"));
     return res.json({ success });
   } catch (error: any) {
     return sendApiError(res, 'Erro ao atualizar notificação.', error);
@@ -151,7 +151,7 @@ apiRouter.patch('/notifications/:clientId/read/:notificationId', authMiddleware,
  */
 apiRouter.patch('/notifications/:clientId/read-all', authMiddleware, enforceAntiIdor(), async (req: Request, res: Response) => {
   try {
-    const clientId = req.params.clientId === 'me' ? (req.user?.clientId as string) : req.params.clientId;
+    const clientId = routeParam(req, "clientId") === 'me' ? (req.user?.clientId as string) : routeParam(req, "clientId");
     const count = await notificationsService.markAllAsRead(clientId);
     return res.json({ success: true, updatedCount: count });
   } catch (error: any) {
@@ -280,7 +280,7 @@ apiRouter.get('/financial/pix/stream/:clientId', (req: Request, res: Response) =
     });
   }
 
-  const clientId = req.params.clientId;
+  const clientId = routeParam(req, "clientId");
   // O ouvinte só acompanha o próprio clientId; alias "me" resolve para a
   // identidade do token. Admin tem visão irrestrita (espelha requireAdmin).
   const targetClientId = clientId === 'me' ? (req.user?.clientId as string) : clientId;
@@ -370,7 +370,7 @@ apiRouter.get('/financial/pix/stream/:clientId', (req: Request, res: Response) =
 apiRouter.get('/referrals/:clientId', authMiddleware, enforceAntiIdor(), async (req: Request, res: Response) => {
   if (!requireDemoAdapter(res, 'Programa de indicações')) return;
   try {
-    const clientId = req.params.clientId === 'me' ? (req.user?.clientId as string) : req.params.clientId;
+    const clientId = routeParam(req, "clientId") === 'me' ? (req.user?.clientId as string) : routeParam(req, "clientId");
     const summary = await referralService.getReferralSummary(clientId);
     return res.json({ ...summary, simulated: true, dataState: 'DEMO' });
   } catch (error: any) {
@@ -384,7 +384,7 @@ apiRouter.get('/referrals/:clientId', authMiddleware, enforceAntiIdor(), async (
 apiRouter.post('/referrals/:clientId', authMiddleware, enforceAntiIdor(), async (req: Request, res: Response) => {
   if (!requireDemoAdapter(res, 'Programa de indicações')) return;
   try {
-    const clientId = req.params.clientId === 'me' ? (req.user?.clientId as string) : req.params.clientId;
+    const clientId = routeParam(req, "clientId") === 'me' ? (req.user?.clientId as string) : routeParam(req, "clientId");
     const friend = await referralService.addReferral({
       referrerClientId: clientId,
       referredName: req.body.referredName,

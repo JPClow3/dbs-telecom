@@ -5,7 +5,7 @@ import { CONFIG } from '../config/env.js';
 import { csatService } from '../modules/csat/csat.service.js';
 import type { DepartmentType } from '../modules/ai/ai.service.js';
 import { authMiddleware, enforceAntiIdor, optionalAuthMiddleware, requireAdmin } from '../middlewares/auth.middleware.js';
-import { sendApiError, asyncHandler } from './route.helpers.js';
+import { routeParam, sendApiError, asyncHandler } from './route.helpers.js';
 import { registerSseResponse } from '../app.js';
 
 export function registerChatRoutes(apiRouter: Router): void {
@@ -64,7 +64,7 @@ apiRouter.post('/chat/message', authMiddleware, enforceAntiIdor('clientId'), asy
  * Recupera o histórico de mensagens persistidas no armazenamento configurado.
  */
 apiRouter.get('/chat/history/:sessionId', authMiddleware, asyncHandler(async (req: Request, res: Response) => {
-  const { sessionId } = req.params;
+  const sessionId = routeParam(req, "sessionId");
   const sessionOwner = await chatService.getSessionOwner(sessionId);
   if (!sessionOwner) {
     return res.status(404).json({ error: 'Sessão de atendimento não encontrada.', code: 'CHAT_SESSION_NOT_FOUND' });
@@ -307,7 +307,7 @@ apiRouter.get('/chat/csat/stats', authMiddleware, requireAdmin, asyncHandler(asy
  * ⭐ Histórico de Avaliações por Cliente (Anti-IDOR)
  */
 apiRouter.get('/chat/csat/client/:clientId', authMiddleware, enforceAntiIdor('clientId'), asyncHandler(async (req: Request, res: Response) => {
-  const { clientId } = req.params;
+  const clientId = routeParam(req, "clientId");
   const targetClientId = clientId === 'me' ? req.user!.clientId : clientId;
   const page = Math.max(1, parseInt(req.query.page as string, 10) || 1);
   const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string, 10) || 20));

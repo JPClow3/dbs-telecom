@@ -2,14 +2,14 @@ import { Router, type Request, type Response } from 'express';
 import { CONFIG } from '../config/env.js';
 import { financialService } from '../modules/financial/financial.service.js';
 import { authMiddleware, enforceAntiIdor, optionalAuthMiddleware } from '../middlewares/auth.middleware.js';
-import { sendApiError } from './route.helpers.js';
+import { routeParam, sendApiError } from './route.helpers.js';
 
 export function registerFinancialRoutes(apiRouter: Router): void {
 /**
  * Consulta de Faturas e Boletos no IXC (Anti-IDOR)
  */
 apiRouter.get('/financial/invoices/:clientId', authMiddleware, enforceAntiIdor('clientId'), async (req: Request, res: Response) => {
-  const { clientId } = req.params;
+  const clientId = routeParam(req, "clientId");
   const targetClientId = clientId === 'me' ? req.user!.clientId : clientId;
   // O IXC limita o upstream a 10 faturas; a paginação é apenas por consistência.
   const page = Math.max(1, parseInt(req.query.page as string, 10) || 1);
@@ -45,7 +45,7 @@ apiRouter.post('/financial/unblock-promise', authMiddleware, enforceAntiIdor('cl
  * Visualização e Download do PDF do Boleto Bancário
  */
 apiRouter.get('/financial/invoices/:id/pdf', authMiddleware, async (req: Request, res: Response) => {
-  const { id } = req.params;
+  const id = routeParam(req, "id");
   const requestedClientId = req.query.clientId as string | undefined;
   if (requestedClientId && requestedClientId !== 'me' && req.user?.role !== 'admin' && requestedClientId !== req.user?.clientId) {
     return res.status(403).json({ error: 'Acesso negado ao boleto de outro cliente.', code: 'IDOR_FORBIDDEN' });

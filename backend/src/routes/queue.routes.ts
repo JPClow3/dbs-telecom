@@ -2,7 +2,7 @@ import { Router, type Request, type Response } from 'express';
 import { CONFIG } from '../config/env.js';
 import { queueService, isKnownDepartment, type DepartmentType } from '../modules/queue/queue.service.js';
 import { authMiddleware, enforceAntiIdor, optionalAuthMiddleware, requireAdmin } from '../middlewares/auth.middleware.js';
-import { sendApiError, asyncHandler } from './route.helpers.js';
+import { routeParam, sendApiError, asyncHandler } from './route.helpers.js';
 import { registerSseResponse } from '../app.js';
 
 /**
@@ -78,7 +78,7 @@ apiRouter.post('/queue/join', authMiddleware, enforceAntiIdor('clientId'), async
  * 👤 Transbordo / Fila Virtual - Consultar posição e tempo estimado em tempo real (Anti-IDOR)
  */
 apiRouter.get('/queue/status/:clientId', authMiddleware, enforceAntiIdor('clientId'), asyncHandler(async (req: Request, res: Response) => {
-  const { clientId } = req.params;
+  const clientId = routeParam(req, "clientId");
   const targetClientId = clientId === 'me' ? req.user!.clientId : clientId;
   const status = await queueService.getQueueStatus(targetClientId);
   return res.json(status);
@@ -92,7 +92,7 @@ apiRouter.get('/queue/stream/:clientId', optionalAuthMiddleware, (req: Request, 
   if (!req.user && !CONFIG.demoMode) {
     return res.status(401).json({ error: 'Autenticação obrigatória para acompanhar a fila.', code: 'TOKEN_MISSING' });
   }
-  const { clientId } = req.params;
+  const clientId = routeParam(req, "clientId");
   // Sem token (demonstração), o acompanhamento anônimo fica fixado no cliente
   // demo; nunca expor a fila de um clientId arbitrário sem autenticação.
   const targetClientId = req.user ? (clientId === 'me' ? req.user.clientId : clientId) : '2270';
