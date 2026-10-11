@@ -1,7 +1,7 @@
 {
   "name": "dbs-telecom-backend",
   "version": "1.0.0",
-  "description": "BFF e API de Atendimento Inteligente DBS Telecom com Integração IXC Soft e IA",
+  "description": "BFF e API de Atendimento Inteligente DBS Telecom com Integra\u00e7\u00e3o IXC Soft e IA",
   "main": "dist/server.js",
   "scripts": {
     "dev": "tsx watch src/server.ts",
@@ -34,7 +34,7 @@
     "@neondatabase/serverless": "^1.1.0",
     "cors": "^2.8.5",
     "dotenv": "^17.4.2",
-    "express": "^4.19.2",
+    "express": "^5.2.1",
     "express-rate-limit": "^8.6.2",
     "helmet": "^8.3.0",
     "jsonwebtoken": "^9.0.3",
@@ -45,7 +45,7 @@
     "@cloudflare/workers-types": "^5.20260820.1",
     "@types/better-sqlite3": "^9.6.0",
     "@types/cors": "^2.8.17",
-    "@types/express": "^4.17.21",
+    "@types/express": "^5.0.6",
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^22.8.6",
     "@types/supertest": "^7.2.1",
