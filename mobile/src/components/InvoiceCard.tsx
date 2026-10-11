@@ -27,11 +27,12 @@ interface InvoiceCardProps {
 
 export const InvoiceCard: React.FC<InvoiceCardProps> = ({
   invoice,
-  isDemo = false,
+  isDemo: isDemoProp = false,
   onCopy,
   onFeedback,
   onUnblockPromise,
 }) => {
+  const isDemo = isDemoProp || invoice.simulated === true || invoice.dataState === 'DEMO';
   const { colors, isDark } = useAppTheme();
   const [copiedType, setCopiedType] = useState<'BARCODE' | 'PIX' | null>(null);
   const [downloadingPdf, setDownloadingPdf] = useState(false);

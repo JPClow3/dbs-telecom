@@ -10,7 +10,7 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
-    "test": "tsx --test test/**/*.test.ts",
+    "test": "node scripts/run-tests.mjs",
     "typecheck": "node --stack-size=16384 ./node_modules/typescript/bin/tsc --noEmit"
   },
   "dependencies": {
