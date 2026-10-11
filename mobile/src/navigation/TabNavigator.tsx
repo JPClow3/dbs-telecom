@@ -1,7 +1,6 @@
 import React from 'react';
 import { View, Text, StyleSheet, Platform } from 'react-native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { useNavigation } from '@react-navigation/native';
 import { MainTabParamList } from './types';
 import { useAppTheme } from '../context/ThemeContext';
 import { hapticFeedback } from '../utils/haptics';
@@ -23,7 +22,6 @@ interface TabNavigatorProps {
 
 export const TabNavigator: React.FC<TabNavigatorProps> = ({ customer, onLogout }) => {
   const { colors, isDark } = useAppTheme();
-  const navigation = useNavigation<any>();
 
   return (
     <Tab.Navigator
@@ -69,7 +67,7 @@ export const TabNavigator: React.FC<TabNavigatorProps> = ({ customer, onLogout }
           ),
         }}
       >
-        {({ route }) => (
+        {({ route, navigation }) => (
           <ChatScreen
             customer={customer}
             selectedPlanToHire={route.params?.selectedPlanToHire}
@@ -101,7 +99,7 @@ export const TabNavigator: React.FC<TabNavigatorProps> = ({ customer, onLogout }
           ),
         }}
       >
-        {({ route }) => (
+        {({ route, navigation }) => (
           <InvoicesScreen
             customer={customer}
             invoiceId={route.params?.invoiceId}
@@ -126,7 +124,7 @@ export const TabNavigator: React.FC<TabNavigatorProps> = ({ customer, onLogout }
           ),
         }}
       >
-        {() => (
+        {({ navigation }) => (
           <PlansScreen
             customer={customer}
             onSelectPlan={(plan: DBSPlan) => {
@@ -153,7 +151,7 @@ export const TabNavigator: React.FC<TabNavigatorProps> = ({ customer, onLogout }
           ),
         }}
       >
-        {() => (
+        {({ navigation }) => (
           <ProfileScreen
             customer={customer}
             onLogout={onLogout}
