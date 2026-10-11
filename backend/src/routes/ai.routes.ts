@@ -39,7 +39,7 @@ apiRouter.post('/ai/classify', authMiddleware, enforceAntiIdor('clientId'), asyn
     });
   }
 
-  const { message, clientId } = req.body;
+  const { message, clientId } = req.body ?? {};
   const targetClientId = clientId || req.user?.clientId;
 
   try {

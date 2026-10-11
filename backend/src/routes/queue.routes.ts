@@ -30,7 +30,7 @@ export function registerQueueRoutes(apiRouter: Router): void {
  * nunca são processadas e impede o enfileiramento seletivo em setores alheios.
  */
 apiRouter.post('/queue/join', authMiddleware, enforceAntiIdor('clientId'), asyncHandler(async (req: Request, res: Response) => {
-  const { sessionId, clientId, clientName, department, reason } = req.body;
+  const { sessionId, clientId, clientName, department, reason } = req.body ?? {};
   const targetClientId = clientId || req.user?.clientId;
 
   if (!targetClientId) {
@@ -152,7 +152,7 @@ apiRouter.get('/queue/stream/:clientId', optionalAuthMiddleware, (req: Request, 
  * 👤 Transbordo / Fila Virtual - Sair ou cancelar a fila de espera (Anti-IDOR)
  */
 apiRouter.post('/queue/leave', authMiddleware, enforceAntiIdor('clientId'), asyncHandler(async (req: Request, res: Response) => {
-  const { clientId } = req.body;
+  const { clientId } = req.body ?? {};
   const targetClientId = clientId || req.user?.clientId;
   if (!targetClientId) {
     return res.status(400).json({ error: 'clientId é obrigatório.' });
@@ -178,7 +178,7 @@ apiRouter.post('/queue/leave', authMiddleware, enforceAntiIdor('clientId'), asyn
  *   funcional inclusive nas etapas de atendente, pois é ambiente de testes.
  */
 apiRouter.post('/queue/progress', authMiddleware, enforceAntiIdor('clientId'), asyncHandler(async (req: Request, res: Response) => {
-  const { clientId } = req.body;
+  const { clientId } = req.body ?? {};
   const targetClientId = clientId || req.user?.clientId;
   if (!targetClientId) {
     return res.status(400).json({ error: 'clientId é obrigatório.' });

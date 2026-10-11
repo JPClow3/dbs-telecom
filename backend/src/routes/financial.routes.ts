@@ -27,7 +27,7 @@ apiRouter.get('/financial/invoices/:clientId', authMiddleware, enforceAntiIdor('
  * Desbloqueio em Confiança (Promessa de Pagamento por 72h) (Anti-IDOR)
  */
 apiRouter.post('/financial/unblock-promise', authMiddleware, enforceAntiIdor('clientId'), async (req: Request, res: Response) => {
-  const { clientId, contractId } = req.body;
+  const { clientId, contractId } = req.body ?? {};
   const targetClientId = clientId || req.user?.clientId;
   if (!targetClientId) {
     return res.status(400).json({ error: 'clientId obrigatório.' });

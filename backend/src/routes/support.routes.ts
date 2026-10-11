@@ -9,7 +9,7 @@ export function registerSupportRoutes(apiRouter: Router): void {
  * Suporte e Diagnóstico Guiado (Anti-IDOR)
  */
 apiRouter.post('/support/diagnostic', authMiddleware, enforceAntiIdor('clientId'), asyncHandler(async (req: Request, res: Response) => {
-  const { clientId, userResponse, action } = req.body;
+  const { clientId, userResponse, action } = req.body ?? {};
   const targetClientId = clientId || req.user?.clientId;
 
   if (!targetClientId) {

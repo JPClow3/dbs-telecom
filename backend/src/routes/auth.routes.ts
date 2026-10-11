@@ -22,7 +22,7 @@ function normalizeCpfCnpj(doc: string): string {
 }
 
 function getObjectBody(req: Request): Record<string, any> {
-  const body = req.body;
+  const body = req.body ?? {};
   return body && typeof body === 'object' && !Array.isArray(body) ? body : {};
 }
 

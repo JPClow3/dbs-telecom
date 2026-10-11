@@ -13,7 +13,7 @@ export function registerChatRoutes(apiRouter: Router): void {
  * Saudação inicial personalizada (Anti-IDOR)
  */
 apiRouter.post('/chat/greeting', authMiddleware, enforceAntiIdor('clientId'), async (req: Request, res: Response) => {
-  const { clientId } = req.body;
+  const { clientId } = req.body ?? {};
   if (!clientId) {
     return res.status(400).json({ error: 'clientId obrigatório.' });
   }
@@ -34,7 +34,7 @@ apiRouter.post('/chat/greeting', authMiddleware, enforceAntiIdor('clientId'), as
  * mensagem persistida ou entrada na fila.
  */
 apiRouter.post('/chat/message', authMiddleware, enforceAntiIdor('clientId'), async (req: Request, res: Response) => {
-  const { sessionId, message, clientId, messageId, clientMessageId: bodyClientMessageId } = req.body;
+  const { sessionId, message, clientId, messageId, clientMessageId: bodyClientMessageId } = req.body ?? {};
   const stableMessageId = bodyClientMessageId || messageId;
 
   if (!message) {
@@ -199,7 +199,7 @@ const AUDIO_MIME_ALIASES = new Map<string, string>([
 const MAX_AUDIO_BASE64_LENGTH = Math.floor((10 * 1024 * 1024 * 4) / 3);
 
 apiRouter.post('/chat/audio', authMiddleware, enforceAntiIdor('clientId'), async (req: Request, res: Response) => {
-  const { audioBase64, mimeType, sessionId, clientId } = req.body;
+  const { audioBase64, mimeType, sessionId, clientId } = req.body ?? {};
 
   if (!audioBase64) {
     return res.status(400).json({ error: 'Áudio em base64 é obrigatório.' });

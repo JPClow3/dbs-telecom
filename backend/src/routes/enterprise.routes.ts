@@ -192,7 +192,7 @@ apiRouter.post('/notifications/simulate', authMiddleware, requireAdmin, async (r
  */
 apiRouter.post('/financial/pix/webhook', async (req: Request, res: Response) => {
   try {
-    const payload = req.body;
+    const payload = req.body ?? {};
 
     // A forma do payload é validada sempre; apenas a assinatura criptográfica
     // é dispensada no modo demonstração.
@@ -387,8 +387,8 @@ apiRouter.post('/referrals/:clientId', authMiddleware, enforceAntiIdor(), async 
     const clientId = routeParam(req, "clientId") === 'me' ? (req.user?.clientId as string) : routeParam(req, "clientId");
     const friend = await referralService.addReferral({
       referrerClientId: clientId,
-      referredName: req.body.referredName,
-      referredPhone: req.body.referredPhone,
+      referredName: req.body?.referredName,
+      referredPhone: req.body?.referredPhone,
     });
     return res.status(201).json({ ...friend, simulated: true, dataState: 'DEMO' });
   } catch (error: any) {
