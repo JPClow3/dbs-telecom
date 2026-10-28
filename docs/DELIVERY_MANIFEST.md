@@ -24,7 +24,9 @@ cd e2e; npm.cmd test
 
 O pacote deve registrar o commit de origem, link/arquivo do APK e o resultado dessas verificações antes da entrega. A execução E2E web não substitui a instalação e o smoke test do APK em aparelho físico.
 
-## Evidências desta entrega (22/08/2026)
+## Evidências da entrega de 22/08/2026
+
+Este bloco é um registro histórico do pacote gerado nessa data, não uma declaração do estado atual dos serviços. Para uma nova entrega, repita os gates, atualize o commit, os artefatos, os hashes e as verificações externas antes de reutilizar este manifesto.
 
 - Worker publicado: `https://dbs-telecom-api.joaopaulo-grv4.workers.dev` (versão `57e4db20-0107-41f3-b350-2c129ec67696`); `GET /api/health` respondeu 200.
 - APK Android: build EAS `244627ec-3dc6-4ebd-b064-af7639c556b1` (perfil `preview`, distribuição interna). O arquivo final é incluído no diretório `APK/` do ZIP; SHA-256 `FC9F172423BA2BFC1797E7E413B917741550F77B41A2C58FA915416DC3D964BB`.
