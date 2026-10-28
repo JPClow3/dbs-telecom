@@ -6,20 +6,20 @@ export const swaggerDocument: Record<string, any> = {
     description: `
 ### Backend for Frontend (BFF) de Atendimento Inteligente DBS Telecom
 
-Este backend integra o aplicativo móvel do cliente com o **ERP IXC Soft WebService v1** e orquestra o motor de **Inteligência Artificial Google Gemini** com **Guardrails de Segurança Multicamadas**.
+Este backend integra o aplicativo móvel do cliente com o **ERP IXC Soft WebService v1** e orquestra provedores de IA configuráveis (Gemini, OpenAI ou mock) com **Guardrails de Segurança Multicamadas**.
 
 ---
 
 ### 🔐 Segurança & Autenticação (Anti-IDOR)
-- **Login Inicial:** Autenticação por CPF/CNPJ com senha padrão sendo o próprio CPF (\`/api/auth/login\`).
+- **Login Inicial:** A conta pode usar CPF/CNPJ sem pontuação como credencial inicial (\`/api/auth/login\`). O contrato HTTP exige o campo \`password\`; senhas personalizadas são armazenadas como hash e o documento continua aceito por compatibilidade.
 - **Tokens JWT:** Todas as rotas protegidas exigem o cabeçalho \`Authorization: Bearer <token>\`.
 - **Proteção Anti-IDOR (Insecure Direct Object References):** Um cliente autenticado só tem permissão para consultar suas próprias faturas, chamados e dados cadastrais. Tentativas de acesso a dados de outros clientes são bloqueadas com **HTTP 403 Forbidden**.
-- **Alias 'me':** Em qualquer endpoint com \`:clientId\`, é permitido utilizar \`/api/financial/invoices/me\` para resolver automaticamente para o cliente autenticado.
+- **Alias 'me':** Nas rotas de recurso que aceitam \`:clientId\`, é permitido utilizar \`me\` para resolver automaticamente o cliente autenticado.
 
 ---
 
 ### 💾 Persistência de Conversas
-- Sessões e histórico de mensagens usam **PostgreSQL/Neon** quando DATABASE_URL está configurada. O fallback em memória é exclusivo de testes e desenvolvimento isolado.
+- Sessões e histórico de mensagens usam **PostgreSQL/Neon** quando DATABASE_URL está configurada. Sem essa variável, o runtime Node usa SQLite \`:memory:\` descartável para desenvolvimento/testes; produção exige PostgreSQL.
     `,
     contact: {
       name: 'Suporte Técnico & Engenharia DBS Telecom',
@@ -42,7 +42,7 @@ Este backend integra o aplicativo móvel do cliente com o **ERP IXC Soft WebServ
   ],
   tags: [
     { name: '🔐 Autenticação & Usuários', description: 'Emissão de JWT, sincronização de usuários IXC e identificação' },
-    { name: '💬 Atendimento Inteligente & Chatbot IA', description: 'Orquestração de conversas, Google Gemini, Fast Router e histórico' },
+    { name: '💬 Atendimento Inteligente & Chatbot IA', description: 'Orquestração de conversas, provedores de IA, Fast Router e histórico' },
     { name: '💳 Financeiro & Faturas (Anti-IDOR)', description: 'Consulta de faturas, linha digitável, PIX Copia-e-Cola, PDF e desbloqueio em confiança' },
     { name: '🛠️ Suporte Técnico & Diagnóstico (Anti-IDOR)', description: 'Máquina de estados de diagnóstico guiado e Ordens de Serviço (O.S.)' },
     { name: '🚀 Comercial & Planos', description: 'Catálogo de planos de fibra ótica Urbanos e Wi-Fi 6 (802.11ax)' },
@@ -54,8 +54,8 @@ Este backend integra o aplicativo móvel do cliente com o **ERP IXC Soft WebServ
     '/health': {
       get: {
         tags: ['⚡ Sistema & Diagnóstico de Rede'],
-        summary: 'Healthcheck e status da conexão com IXC e Gemini',
-        description: 'Retorna o status operacional do backend BFF, status do ERP IXC e configuração do motor Gemini.',
+        summary: 'Liveness do backend BFF',
+        description: 'Retorna 200 quando o processo está respondendo. Não consulta IXC, banco ou provedores de IA.',
         responses: {
           '200': {
             description: 'Serviço operacional',
@@ -68,18 +68,32 @@ Este backend integra o aplicativo móvel do cliente com o **ERP IXC Soft WebServ
         },
       },
     },
+    '/health/ready': {
+      get: {
+        tags: ['⚡ Sistema & Diagnóstico de Rede'],
+        summary: 'Readiness protegido por administrador',
+        description: 'Verifica a conexão PostgreSQL/Neon sem expor segredos, URLs de provedor ou flags internas.',
+        security: [{ bearerAuth: [] }],
+        responses: {
+          '200': { description: 'Backend pronto e PostgreSQL conectado' },
+          '401': { description: 'Token JWT ausente ou inválido' },
+          '403': { description: 'Papel de administrador obrigatório' },
+          '503': { description: 'Backend degradado ou PostgreSQL indisponível' },
+        },
+      },
+    },
     '/auth/login': {
       post: {
         tags: ['🔐 Autenticação & Usuários'],
         summary: 'Autenticação de cliente e emissão de Token JWT (Anti-IDOR)',
-        description: 'Autentica o cliente na base IXC (login padrão: CPF / senha: CPF sem pontuação) e emite token JWT com permissões anti-IDOR.',
+        description: 'Autentica o cliente na base IXC. O login aceita CPF/CNPJ e o primeiro acesso pode usar o documento sem pontuação como senha; o campo `password` é sempre enviado explicitamente. Emite token JWT com permissões anti-IDOR.',
         requestBody: {
           required: true,
           content: {
             'application/json': {
               schema: { $ref: '#/components/schemas/LoginRequest' },
               example: {
-                cpfCnpj: '00000000000',
+                cpfCnpj: '<documento-de-teste>',
                 password: 'senha-de-exemplo',
               },
             },
@@ -103,7 +117,8 @@ Este backend integra o aplicativo móvel do cliente com o **ERP IXC Soft WebServ
       post: {
         tags: ['🔐 Autenticação & Usuários'],
         summary: 'Identificação rápida de cliente por CPF/CNPJ',
-        description: 'Busca os dados cadastrais do cliente no IXC pelo CPF/CNPJ (com ou sem pontuação).',
+        description: 'Com JWT válido, confirma o cliente no IXC pelo CPF/CNPJ (com ou sem pontuação) e devolve somente nome e documento mascarado. Não é uma consulta pré-login.',
+        security: [{ bearerAuth: [] }],
         requestBody: {
           required: true,
           content: {
@@ -112,7 +127,7 @@ Este backend integra o aplicativo móvel do cliente com o **ERP IXC Soft WebServ
                 type: 'object',
                 required: ['cpfCnpj'],
                 properties: {
-                  cpfCnpj: { type: 'string', example: '00000000000' },
+                  cpfCnpj: { type: 'string', example: '<documento-de-teste>' },
                 },
               },
             },
@@ -120,6 +135,7 @@ Este backend integra o aplicativo móvel do cliente com o **ERP IXC Soft WebServ
         },
         responses: {
           '200': { description: 'Cliente localizado no IXC' },
+          '401': { description: 'Token JWT ausente ou inválido' },
           '404': { description: 'Cliente não encontrado' },
         },
       },
@@ -127,7 +143,8 @@ Este backend integra o aplicativo móvel do cliente com o **ERP IXC Soft WebServ
     '/auth/sync-users': {
       post: {
         tags: ['🔐 Autenticação & Usuários'],
-        summary: 'Sincronização em lote de usuários IXC (Senha padrão = CPF)',
+        summary: 'Sincronização em lote de usuários IXC (CPF/CNPJ como credencial inicial)',
+        security: [{ bearerAuth: [] }],
         responses: {
           '200': { description: 'Usuários sincronizados com sucesso' },
         },
@@ -136,9 +153,23 @@ Este backend integra o aplicativo móvel do cliente com o **ERP IXC Soft WebServ
     '/auth/users': {
       get: {
         tags: ['🔐 Autenticação & Usuários'],
-        summary: 'Lista todos os usuários sincronizados',
+        summary: 'Lista todos os usuários sincronizados sem hashes',
+        security: [{ bearerAuth: [] }],
         responses: {
           '200': { description: 'Lista de usuários' },
+        },
+      },
+    },
+    '/auth/change-password': {
+      post: {
+        tags: ['🔐 Autenticação & Usuários'],
+        summary: 'Troca a senha e revoga sessões anteriores',
+        security: [{ bearerAuth: [] }],
+        responses: {
+          '200': { description: 'Senha alterada e novo token emitido' },
+          '400': { description: 'Senha atual ou nova senha inválida' },
+          '401': { description: 'Token JWT ausente ou inválido' },
+          '403': { description: 'Violação Anti-IDOR' },
         },
       },
     },
@@ -155,7 +186,7 @@ Este backend integra o aplicativo móvel do cliente com o **ERP IXC Soft WebServ
                 type: 'object',
                 required: ['clientId'],
                 properties: {
-                  clientId: { type: 'string', example: '2270' },
+                  clientId: { type: 'string', example: '<client-id>' },
                 },
               },
             },
@@ -178,7 +209,7 @@ Este backend integra o aplicativo móvel do cliente com o **ERP IXC Soft WebServ
     '/chat/message': {
       post: {
         tags: ['💬 Atendimento Inteligente & Chatbot IA'],
-        summary: 'Envia e processa mensagem no chat com Fast Router, IA Gemini e Guardrails',
+        summary: 'Envia e processa mensagem no chat com Fast Router, provedor de IA e Guardrails',
         description: 'Processa a mensagem em linguagem natural, roteando para Comercial, Suporte ou Financeiro, com persistência PostgreSQL quando configurada.',
         security: [{ bearerAuth: [] }],
         requestBody: {
@@ -189,8 +220,8 @@ Este backend integra o aplicativo móvel do cliente com o **ERP IXC Soft WebServ
                 type: 'object',
                 required: ['message'],
                 properties: {
-                  sessionId: { type: 'string', example: 'session-2270-main' },
-                  clientId: { type: 'string', example: '2270' },
+                  sessionId: { type: 'string', example: 'session-demo' },
+                  clientId: { type: 'string', example: '<client-id>' },
                   message: { type: 'string', example: 'Preciso da segunda via do meu boleto' },
                 },
               },
@@ -222,7 +253,7 @@ Este backend integra o aplicativo móvel do cliente com o **ERP IXC Soft WebServ
             in: 'path',
             required: true,
             schema: { type: 'string' },
-            example: 'session-2270-main',
+            example: 'session-demo',
           },
         ],
         responses: {
@@ -260,7 +291,7 @@ Este backend integra o aplicativo móvel do cliente com o **ERP IXC Soft WebServ
             in: 'path',
             required: true,
             schema: { type: 'string' },
-            example: '2270',
+            example: '<client-id>',
             description: 'ID do cliente no IXC ou "me"',
           },
         ],
@@ -301,8 +332,8 @@ Este backend integra o aplicativo móvel do cliente com o **ERP IXC Soft WebServ
                 type: 'object',
                 required: ['clientId'],
                 properties: {
-                  clientId: { type: 'string', example: '2270' },
-                  contractId: { type: 'string', example: '2323' },
+                  clientId: { type: 'string', example: '<client-id>' },
+                  contractId: { type: 'string', example: '<contract-id>' },
                 },
               },
             },
@@ -333,13 +364,13 @@ Este backend integra o aplicativo móvel do cliente com o **ERP IXC Soft WebServ
             in: 'path',
             required: true,
             schema: { type: 'string' },
-            example: '145690',
+            example: '<invoice-id>',
           },
           {
             name: 'clientId',
             in: 'query',
             schema: { type: 'string' },
-            example: '2270',
+            example: '<client-id>',
           },
           {
             name: 'download',
@@ -373,7 +404,7 @@ Este backend integra o aplicativo móvel do cliente com o **ERP IXC Soft WebServ
                 type: 'object',
                 required: ['clientId'],
                 properties: {
-                  clientId: { type: 'string', example: '2270' },
+                  clientId: { type: 'string', example: '<client-id>' },
                   userResponse: { type: 'string', example: 'Acontece em todos os aparelhos' },
                   action: { type: 'string', enum: ['start', 'step'], example: 'start' },
                 },
@@ -399,7 +430,7 @@ Este backend integra o aplicativo móvel do cliente com o **ERP IXC Soft WebServ
             in: 'path',
             required: true,
             schema: { type: 'string' },
-            example: '2270',
+            example: '<client-id>',
           },
         ],
         responses: {
@@ -468,7 +499,7 @@ Este backend integra o aplicativo móvel do cliente com o **ERP IXC Soft WebServ
             in: 'path',
             required: true,
             schema: { type: 'string' },
-            example: '2270',
+            example: '<client-id>',
           },
           {
             name: 'days',
@@ -504,7 +535,7 @@ Este backend integra o aplicativo móvel do cliente com o **ERP IXC Soft WebServ
                 required: ['message'],
                 properties: {
                   message: { type: 'string', example: 'Quero conhecer os planos Wi-Fi 6' },
-                  clientId: { type: 'string', example: '2270' },
+                  clientId: { type: 'string', example: '<client-id>' },
                 },
               },
             },
@@ -526,7 +557,7 @@ Este backend integra o aplicativo móvel do cliente com o **ERP IXC Soft WebServ
             in: 'path',
             required: true,
             schema: { type: 'string' },
-            example: '2270',
+            example: '<client-id>',
           },
         ],
         responses: {
@@ -583,27 +614,21 @@ Este backend integra o aplicativo móvel do cliente com o **ERP IXC Soft WebServ
       HealthResponse: {
         type: 'object',
         properties: {
-          status: { type: 'string', example: 'online' },
+          status: { type: 'string', example: 'ok' },
           system: { type: 'string', example: 'DBS Telecom Smart Service BFF' },
-          timestamp: { type: 'string', example: '2026-08-20T00:00:00.000Z' },
-          ixcBaseUrl: { type: 'string', example: 'https://demo.ixcsoft.com.br/webservice/v1' },
-          ai: {
-            type: 'object',
-            properties: {
-              provider: { type: 'string', example: 'gemini' },
-              geminiConfigured: { type: 'boolean', example: true },
-              geminiModel: { type: 'string', example: 'modelo-configurado-por-ambiente' },
-              guardrailsEnabled: { type: 'boolean', example: true },
-              temperature: { type: 'number', example: 0.2 },
-            },
-          },
+          timestamp: { type: 'string', format: 'date-time', example: '2026-01-01T00:00:00.000Z' },
         },
       },
       LoginRequest: {
         type: 'object',
-        required: ['cpfCnpj'],
+        required: ['password'],
+        anyOf: [
+          { required: ['cpfCnpj'] },
+          { required: ['login'] },
+        ],
         properties: {
-          cpfCnpj: { type: 'string', example: '00000000000', description: 'Documento de exemplo; não use dados de cliente na documentação' },
+          cpfCnpj: { type: 'string', example: '<documento-de-teste>', description: 'CPF/CNPJ de teste; não use dados de cliente na documentação' },
+          login: { type: 'string', example: '<login-de-teste>', description: 'Alias legado de login; use cpfCnpj nos clientes novos' },
           password: { type: 'string', example: 'senha-de-exemplo', description: 'Senha de exemplo; nunca use uma credencial real' },
         },
       },
@@ -613,6 +638,8 @@ Este backend integra o aplicativo móvel do cliente com o **ERP IXC Soft WebServ
           found: { type: 'boolean', example: true },
           authenticated: { type: 'boolean', example: true },
           token: { type: 'string', example: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...', description: 'Token JWT para autorização' },
+          mode: { type: 'string', enum: ['live', 'demo'], example: 'live' },
+          dataState: { type: 'string', enum: ['LIVE', 'DEMO'], example: 'LIVE' },
           expiresIn: { type: 'string', example: '24h' },
           client: { $ref: '#/components/schemas/Customer' },
           contracts: { type: 'array', items: { type: 'object' } },
@@ -621,13 +648,13 @@ Este backend integra o aplicativo móvel do cliente com o **ERP IXC Soft WebServ
       Customer: {
         type: 'object',
         properties: {
-          id: { type: 'string', example: '2270' },
+          id: { type: 'string', example: '<client-id>' },
           nome: { type: 'string', example: 'Cliente de Exemplo' },
           fantasia: { type: 'string', example: 'Conta de Exemplo' },
-          cpfCnpj: { type: 'string', example: '00000000000' },
+          cpfCnpj: { type: 'string', example: '<documento-confirmado>' },
           email: { type: 'string', example: 'cliente@example.invalid' },
-          telefone: { type: 'string', example: '(49) 98877-6655' },
-          endereco: { type: 'string', example: 'Av. Brasil, 1500 - Centro, Chapecó' },
+          telefone: { type: 'string', example: '<telefone>' },
+          endereco: { type: 'string', example: '<endereco-confirmado>' },
         },
       },
       ChatMessage: {
@@ -636,7 +663,7 @@ Este backend integra o aplicativo móvel do cliente com o **ERP IXC Soft WebServ
           id: { type: 'string', example: 'msg-1724123456-abc12' },
           sender: { type: 'string', enum: ['USER', 'BOT', 'SYSTEM'], example: 'BOT' },
           text: { type: 'string', example: 'Olá! Consulte os dados confirmados da sua conta no aplicativo.' },
-          timestamp: { type: 'string', example: '2026-08-20T00:00:00.000Z' },
+          timestamp: { type: 'string', format: 'date-time', example: '2026-01-01T00:00:00.000Z' },
           department: { type: 'string', enum: ['COMERCIAL', 'SUPORTE', 'FINANCEIRO', 'GERAL'], example: 'FINANCEIRO' },
           quickOptions: { type: 'array', items: { type: 'string' } },
           aiProvider: { type: 'string', example: 'gemini' },
@@ -648,17 +675,17 @@ Este backend integra o aplicativo móvel do cliente com o **ERP IXC Soft WebServ
       FormattedInvoice: {
         type: 'object',
         properties: {
-          id: { type: 'string', example: '145690' },
-          documento: { type: 'string', example: '71820' },
-          valor: { type: 'number', example: 119.9 },
-          valorFormatado: { type: 'string', example: 'R$ 119,90' },
-          dataEmissao: { type: 'string', example: '2026-08-10' },
+          id: { type: 'string', example: '<invoice-id>' },
+          documento: { type: 'string', example: '<documento-da-fatura>' },
+          valor: { type: 'number', example: 0 },
+          valorFormatado: { type: 'string', example: '<valor-formatado>' },
+          dataEmissao: { type: 'string', format: 'date', example: '2026-01-01' },
           dataVencimento: { type: 'string', example: '2026-09-10' },
           dataVencimentoFormatada: { type: 'string', example: '10/09/2026' },
           status: { type: 'string', example: 'PENDENTE' },
-          linhaDigitavel: { type: 'string', example: '04790000020000014569803047711654260000011990' },
-          linhaDigitavelFormatada: { type: 'string', example: '04790.00002 00000.145698 03047.711654 2 60000011990' },
-          pixCopiaECola: { type: 'string', example: '00020126580014br.gov.bcb.pix...' },
+          linhaDigitavel: { type: 'string', example: '<linha-digitavel-do-ixc>' },
+          linhaDigitavelFormatada: { type: 'string', example: '<linha-formatada-do-ixc>' },
+          pixCopiaECola: { type: 'string', example: '<pix-copia-e-cola-do-ixc>' },
           isOverdue: { type: 'boolean', example: false },
         },
       },
@@ -671,7 +698,7 @@ Este backend integra o aplicativo móvel do cliente com o **ERP IXC Soft WebServ
           downloadMbps: { type: 'number', example: 500 },
           uploadMbps: { type: 'number', example: 250 },
           price: { type: 'number', example: 139.9 },
-          priceOnTime: { type: 'number', example: 119.9 },
+          priceOnTime: { type: 'number', example: 0 },
           type: { type: 'string', enum: ['URBANO', 'WIFI6', 'RETENCAO'], example: 'URBANO' },
           isPopular: { type: 'boolean', example: true },
           description: { type: 'string', example: 'Nosso plano mais vendido!' },
@@ -682,14 +709,14 @@ Este backend integra o aplicativo móvel do cliente com o **ERP IXC Soft WebServ
       TicketRecord: {
         type: 'object',
         properties: {
-          id: { type: 'string', example: '8472' },
-          id_cliente: { type: 'string', example: '2270' },
+          id: { type: 'string', example: '<ticket-id>' },
+          id_cliente: { type: 'string', example: '<client-id>' },
           assunto: { type: 'string', example: 'Instalação e Troca de Roteador Wi-Fi 6' },
           status: { type: 'string', example: 'EC' },
           statusLabel: { type: 'string', example: 'Técnico a Caminho' },
-          protocolo: { type: 'string', example: 'DBS-781920' },
-          nome_tecnico: { type: 'string', example: 'Carlos Eduardo' },
-          previsao_visita: { type: 'string', example: 'Hoje até às 17:30' },
+          protocolo: { type: 'string', example: '<protocolo>' },
+          nome_tecnico: { type: 'string', example: '<tecnico>' },
+          previsao_visita: { type: 'string', example: '<previsao-confirmada>' },
           etapas: { type: 'array', items: { type: 'object' } },
         },
       },
@@ -698,16 +725,16 @@ Este backend integra o aplicativo móvel do cliente com o **ERP IXC Soft WebServ
         properties: {
           success: { type: 'boolean', example: true },
           message: { type: 'string', example: 'Sinal desbloqueado em confiança com sucesso!' },
-          protocolo: { type: 'string', example: 'DBS-DESB-837192' },
-          unblockUntil: { type: 'string', example: '22/08/2026 23:59' },
+          protocolo: { type: 'string', example: '<protocolo>' },
+          unblockUntil: { type: 'string', example: '<data-de-expiracao>' },
           unblockHours: { type: 'number', example: 72 },
         },
       },
       TrafficConsumptionSummary: {
         type: 'object',
         properties: {
-          clientId: { type: 'string', example: '2270' },
-          period: { type: 'string', example: 'Agosto 2026' },
+          clientId: { type: 'string', example: '<client-id>' },
+          period: { type: 'string', example: '<periodo>' },
           totalDownloadGB: { type: 'number', example: 218.4 },
           totalUploadGB: { type: 'number', example: 39.31 },
           totalConsumedGB: { type: 'number', example: 257.71 },

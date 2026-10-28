@@ -80,7 +80,7 @@ A IA atua exclusivamente no domínio de telecomunicações da DBS Telecom. Consu
 ### 2.2 Camada 2: Injeção de Contexto Seguro & Mascaramento de PII
 
 Gerenciado pelo `IXCContextBuilder` (`backend/src/modules/ai/ixc-context.builder.ts`):
-1. **Mascaramento de Documentos:** CPFs e CNPJs são mascarados antes de serem inseridos no System Prompt (ex: `154.***.***-89`).
+1. **Mascaramento de Documentos:** CPFs e CNPJs são mascarados antes de serem inseridos no System Prompt (ex: `<cpf-mascarado>`). Não use documentos reais em exemplos, logs ou screenshots.
 2. **Isolamento de Tenant / Cliente:** O contexto injeta estritamente os contratos e faturas do cliente associado à sessão autenticada.
 3. **Grounding Factual:** Se o cliente não possuir faturas em aberto no `/fn_areceber`, o contexto declara explicitamente adimplência total.
 

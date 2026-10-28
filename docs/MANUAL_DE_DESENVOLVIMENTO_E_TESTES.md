@@ -1,13 +1,13 @@
 # 🧪 Manual de Desenvolvimento e Testes — DBS Telecom
 
-Este manual fornece as instruções técnicas para desenvolvedores configurarem o ambiente de desenvolvimento, executarem a suíte atual de testes automatizados, depurarem a aplicação móvel em múltiplos ambientes e realizarem o build e deploy conteinerizado com **Docker**.
+Este manual fornece as instruções técnicas para configurar o ambiente, executar os gates automatizados, depurar o aplicativo móvel e publicar o backend. Os comandos abaixo usam PowerShell no Windows; adapte `npm.cmd` para `npm` em shells Unix.
 
 ---
 
 ## 1. Pré-requisitos do Ambiente
 
 * **Node.js:** versão 22+ para o backend e 20+ para o aplicativo Expo. O CI e o Docker do backend usam Node 22.
-* **Gerenciador de Pacotes:** `npm` v9+ ou superior.
+* **Gerenciador de Pacotes:** `npm` v9+ ou superior. O repositório não possui workspace na raiz; instale `backend/`, `mobile/` e `e2e/` separadamente.
 * **Docker & Docker Compose:** Versão 24+ (para execução conteinerizada).
 * **Ambiente Mobile (opcional para testes móveis):**
   - **Navegador Web:** Google Chrome, Brave ou Microsoft Edge (para Web Preview instantâneo).
@@ -19,15 +19,17 @@ Este manual fornece as instruções técnicas para desenvolvedores configurarem 
 ## 2. Configuração e Execução do Backend BFF
 
 ### 2.1 Instalação e Configuração
-```bash
+```powershell
 cd backend
 
 # 1. Copie o arquivo de variáveis de ambiente
-cp .env.example .env
+Copy-Item .env.example .env
 
-# 2. Instale as dependências
-npm install
+# 2. Instale exatamente o lockfile
+npm.cmd ci
 ```
+
+Sem `DATABASE_URL`, o runtime Node usa SQLite `:memory:`. Essa opção é apropriada para desenvolvimento isolado e testes, mas não fornece persistência e não deve ser usada em produção. Para uma integração externa, configure `IXC_BASE_URL`, `IXC_TOKEN`, `AI_PROVIDER` e as chaves correspondentes no `.env`.
 
 ### 2.2 Scripts do `package.json` do Backend
 
@@ -46,18 +48,22 @@ npm install
 
 O backend possui uma suíte de testes automatizados distribuída entre os arquivos em `backend/test` e `backend/src`. A contagem deve ser conferida pela execução atual, pois integrações externas e mudanças de segurança podem alterar o resultado.
 
-```bash
+```powershell
 cd backend
-npm test
+npm.cmd test
 ```
 
 Essa suíte define `AI_PROVIDER=mock`, remove credenciais IXC/Gemini do processo e usa banco em memória. Para validar os provedores separadamente, configure `IXC_TOKEN`, `LIVE_IXC_CLIENT_ID`, `GEMINI_API_KEY` e execute:
 
+O `vitest.config.mts` prefere `TEST_DATABASE_URL`, depois `DATABASE_URL`, e só então cai no SQLite em memória. Mantenha ambas vazias para a suíte local isolada; se usar um banco de teste, ele deve ser descartável e nunca ser o banco de produção.
+
 ```bash
 # PowerShell
 $env:RUN_LIVE_CONTRACTS='true'
-npm run test:live-contracts
+npm.cmd run test:live-contracts
 ```
+
+Os contratos live fazem chamadas externas e só devem ser executados com dados e credenciais autorizados.
 
 ### 3.1 Detalhamento dos Arquivos de Teste
 
@@ -78,7 +84,7 @@ Os arquivos e a quantidade de casos mudam junto com a implementação. Use o rel
 
 #### Rotas e integração (`test/backend.test.ts`):
 * Valida o health check e status dos serviços (`GET /api/health`).
-* Valida a autenticação e login de clientes onde a **senha padrão é o CPF** (`POST /api/auth/login`).
+* Valida a autenticação de clientes com CPF/CNPJ como credencial inicial (`POST /api/auth/login`). O campo HTTP `password` continua obrigatório; após a troca, a senha personalizada e a credencial de compatibilidade CPF/CNPJ continuam aceitas.
 * Valida a sincronização de usuários da base do IXC (`POST /api/auth/sync-users`).
 * Valida a consulta e formatação de faturas do IXC (`GET /api/financial/invoices/:clientId`).
 * Valida o catálogo de planos da DBS Telecom e filtros por tipo (`GET /api/commercial/plans`).
@@ -89,34 +95,36 @@ Os arquivos e a quantidade de casos mudam junto com a implementação. Use o rel
 ## 4. Configuração e Execução do Aplicativo Mobile
 
 ### 4.1 Instalação
-```bash
+```powershell
 cd mobile
 
 # 1. Copie o arquivo de variáveis de ambiente
-cp .env.example .env
+Copy-Item .env.example .env
 
-# 2. Instale as dependências
-npm install
+# 2. Instale exatamente o lockfile
+npm.cmd ci
 
 # 3. Valide política de sessão e tipos
-npm test
-npm run typecheck
+npm.cmd test
+npm.cmd run typecheck
 ```
+
+Defina `EXPO_PUBLIC_API_URL` conforme o alvo. Essa variável entra no bundle público e nunca deve conter tokens, senhas ou segredos.
 
 ### 4.2 Iniciando o Metro Bundler do Expo
 ```bash
-npm start
+npm.cmd start
 ```
 
 ### 4.3 Ambientes de Execução Suportados:
 
 #### 1. Web Preview (Navegador Web — Mais Rápido para Avaliação):
-* Pressione a tecla **`w`** no terminal onde o Expo está rodando.
+* Pressione a tecla **`w`** no terminal onde o Expo está rodando ou execute `npm.cmd run web`.
 * O navegador abrirá automaticamente em `http://localhost:8081`.
 
 #### 2. Emulador Android (Android Studio):
 * Inicie o Emulador no Android Studio.
-* Pressione a tecla **`a`** no terminal do Expo.
+* Pressione a tecla **`a`** no terminal do Expo ou execute `npm.cmd run android`.
 * > [!NOTE]
   > O transporte em `mobile/src/services/api/transport.ts`, exposto pela fachada `api.ts`, detecta automaticamente a plataforma Android e direciona as requisições para `http://10.0.2.2:3000/api` (endereço do host local no emulador Android).
 
@@ -133,17 +141,18 @@ npx expo-doctor
 npx expo export --platform web
 ```
 
-O perfil EAS `production` só aceita `EXPO_PUBLIC_API_URL` com uma URL HTTPS não local. O `app.config.js` interrompe o build quando essa configuração não existe. A geração Android/iOS também depende das credenciais de assinatura de cada plataforma.
+O perfil EAS `production` resolve `EXPO_PUBLIC_API_URL` pelo perfil EAS ou pelo fallback do `app.config.js`; o valor resolvido deve ser HTTPS e não local. O `app.config.js` interrompe o build quando a URL resolvida não é HTTPS ou aponta para `localhost`, `127.0.0.1` ou `10.0.2.2`. A geração Android/iOS também depende das credenciais de assinatura de cada plataforma.
 
 ### 4.5 Jornadas E2E com export atual
 
 ```bash
 cd ../e2e
-npm install
-npm test
+npm.cmd ci
+npx.cmd playwright install chromium
+npm.cmd test
 ```
 
-O launcher do Playwright remove apenas o diretório gerado `mobile/dist`, executa `npx expo export --platform web` e só então inicia o backend com `DBS_DEMO_MODE=true`, provedores mock e banco em memória. Se a exportação falhar, os testes não prosseguem usando um bundle antigo. A suíte web cobre as jornadas principais de forma determinística, mas não substitui a prova nativa em Android/iOS ou os smoke tests de IXC/Gemini.
+Antes dessa etapa, instale também as dependências de `backend/` e `mobile/`, porque o launcher executa a exportação Expo e inicia `backend/src/server.ts` diretamente. O launcher do Playwright remove apenas o diretório gerado `mobile/dist`, executa `npx expo export --platform web` e só então inicia o backend com `DBS_DEMO_MODE=true`, `DEMO_MODE=true`, `AI_PROVIDER=mock`, credenciais externas neutralizadas e banco em memória. Se a exportação falhar, os testes não prosseguem usando um bundle antigo. A suíte web cobre Chromium desktop e mobile, mas não substitui a prova nativa em Android/iOS ou os smoke tests de IXC/Gemini.
 
 Antes da primeira execução E2E, instale as dependências e o navegador:
 
@@ -160,19 +169,19 @@ npx.cmd playwright install chromium
 O projeto está totalmente preparado para execução em containers Docker:
 
 ### 5.1 Estrutura do `Dockerfile` (Multi-stage Build)
-* **Stage 1 (Build):** Compila o TypeScript em ambiente limpo Node.js 20 Alpine.
+* **Stage 1 (Build):** Compila o TypeScript em ambiente limpo Node.js 22 Alpine.
 * **Stage 2 (Runtime):** Cria uma imagem leve contendo apenas os artefatos compilados e dependências de produção.
 
 ### 5.2 Comandos Docker Compose
 ```bash
 # Construir a imagem e subir o backend em segundo plano
-docker-compose up -d --build
+docker compose up -d --build
 
 # Visualizar logs em tempo real
-docker-compose logs -f backend
+docker compose logs -f backend
 
 # Parar os containers
-docker-compose down
+docker compose down
 ```
 
 ---
@@ -190,11 +199,12 @@ docker-compose down
 
 ## 7. Migrações de Banco de Dados (Neon/PostgreSQL)
 
-Use `DATABASE_URL` para o banco de destino e `TEST_DATABASE_URL` apenas para a suíte isolada. O fallback em memória é exclusivo de testes; não há persistência SQLite de produção. Para aplicar migrações:
+Use `DATABASE_URL` para o banco de destino. O fallback em memória é exclusivo de desenvolvimento/testes; não há persistência SQLite de produção. Para aplicar migrações:
 
 ```powershell
 cd backend
-$env:DATABASE_URL = 'postgresql://...'
+$env:DATABASE_URL = 'postgresql://usuario:senha@host/banco?sslmode=require'
+npm.cmd run migrate -- --dry-run
 npm.cmd run migrate
 ```
 
@@ -202,10 +212,10 @@ Para publicar no Cloudflare, mantenha as credenciais exclusivamente como secrets
 
 O schema vive em arquivos SQL versionados em `backend/migrations/`, aplicados em ordem pelo runner oficial:
 
-```bash
+```powershell
 cd backend
-npm run migrate              # aplica as migrações pendentes
-npm run migrate -- --dry-run # apenas lista o que seria aplicado (não altera nada)
+npm.cmd run migrate              # aplica as migrações pendentes
+npm.cmd run migrate -- --dry-run # apenas lista o que seria aplicado (não altera nada)
 ```
 
 * Cada arquivo é executado uma única vez; o controle fica na tabela `schema_migrations`.

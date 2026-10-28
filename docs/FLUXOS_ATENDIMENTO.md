@@ -4,10 +4,10 @@ Os fluxos abaixo são regras de produto. Em todos eles, a interface deve disting
 
 ## Identificação e sessão
 
-1. A pessoa informa documento e senha na tela de login.
+1. A pessoa informa documento e senha na tela de login. No primeiro acesso de uma conta criada/sincronizada pelo BFF, a credencial inicial é o CPF/CNPJ sem pontuação; o campo de senha continua explícito no contrato HTTP.
 2. O BFF consulta o IXC e valida a credencial no servidor.
 3. Em sucesso, cria sessão JWT associada ao cliente autenticado e carrega contratos autorizados.
-4. Documento inexistente, falha de autenticação e indisponibilidade recebem mensagens diferentes; não se cria sessão parcial.
+4. Documento inexistente e senha incorreta compartilham a resposta genérica de autenticação para evitar enumeração; indisponibilidade recebe estado próprio e não cria sessão parcial.
 
 ## Chat e IA
 
