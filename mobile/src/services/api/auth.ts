@@ -1,9 +1,9 @@
-import type { Customer, AuthResponse } from '../../types';
-import { ApiServiceError, getApiUrl, getAuthHeaders, isApiServiceError, responseError, setAuthToken, unavailableError } from './transport';
+import type { AuthResponse, IdentifyResponse } from '../../types';
+import { ApiServiceError, apiFetch, getApiUrl, getAuthHeaders, isApiServiceError, responseError, setAuthToken, unavailableError } from './transport';
 
 export async function loginClient(cpfCnpj: string, password?: string): Promise<AuthResponse> {
   try {
-    const res = await fetch(`${getApiUrl()}/auth/login`, {
+    const res = await apiFetch(`${getApiUrl()}/auth/login`, {
       method: 'POST',
       headers: getAuthHeaders(),
       body: JSON.stringify({ cpfCnpj, password: password !== undefined ? password : cpfCnpj }),
@@ -32,9 +32,9 @@ export async function loginClient(cpfCnpj: string, password?: string): Promise<A
   }
 }
 
-export async function identifyClient(cpfCnpj: string): Promise<{ found: boolean; client: Customer }> {
+export async function identifyClient(cpfCnpj: string): Promise<IdentifyResponse> {
   try {
-    const res = await fetch(`${getApiUrl()}/auth/identify`, {
+    const res = await apiFetch(`${getApiUrl()}/auth/identify`, {
       method: 'POST',
       headers: getAuthHeaders(),
       body: JSON.stringify({ cpfCnpj }),

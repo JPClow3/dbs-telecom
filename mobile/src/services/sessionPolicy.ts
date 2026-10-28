@@ -59,3 +59,22 @@ export function parseAuthSession(json: string | null, now = Date.now()): AuthSes
     return null;
   }
 }
+
+/**
+ * A restored token-backed session may still require the user's biometric
+ * approval before it becomes active on a device.
+ */
+export async function authorizeRestoredSession(
+  session: AuthSession | null,
+  biometricsEnabled: boolean,
+  authenticate: () => Promise<{ success: boolean }>
+): Promise<AuthSession | null> {
+  if (!session) return null;
+  if (!biometricsEnabled) return session;
+  try {
+    const result = await authenticate();
+    return result.success ? session : null;
+  } catch {
+    return null;
+  }
+}

@@ -24,6 +24,8 @@ const PLACEHOLDER_SECRET_PATTERNS = [
   /^secret$/i,
   /^changeme$/i,
   /^todo$/i,
+  /^replace(?:[-_ ]|$)/i,
+  /at[-_ ]?least[-_ ]?\d+[-_ ]?random[-_ ]?characters?/i,
 ];
 
 export function isPlaceholderSecret(value: string | undefined): boolean {
@@ -47,7 +49,9 @@ export const CONFIG = {
   corsOrigin: process.env.CORS_ORIGIN || '*',
   auth: {
     jwtSecret: resolveJwtSecret(process.env.JWT_SECRET),
-    jwtExpiresIn: process.env.JWT_EXPIRES_IN || '7d',
+    // Keep the token claim and the public login/OTP contract aligned. Operators
+    // may still override this explicitly through JWT_EXPIRES_IN.
+    jwtExpiresIn: process.env.JWT_EXPIRES_IN || '24h',
   },
   database: {
     url: process.env.DATABASE_URL?.trim() || '',

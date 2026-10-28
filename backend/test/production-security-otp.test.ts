@@ -41,6 +41,16 @@ describe('🔐 Suite de Segurança de Produção, Hash de Senhas e OTP', () => {
       })).toThrow(/FATAL SECURITY CONFIG/);
     });
 
+    it('deve rejeitar placeholders longos do .env.example em produção', () => {
+      expect(() => validateEnv({
+        NODE_ENV: 'production',
+        JWT_SECRET: 'replace-with-at-least-32-random-characters',
+        IXC_TOKEN: 'ixc-token-configured-only-for-this-test-run',
+        PIX_WEBHOOK_SECRET: 'pix-webhook-secret-configured-only-for-this-test-32',
+        DATABASE_URL: 'postgresql://test:password@localhost/test?sslmode=require',
+      })).toThrow(/FATAL SECURITY CONFIG/);
+    });
+
     it('deve passar na validação quando JWT_SECRET for forte em produção', () => {
       expect(() => {
         validateEnv({
@@ -155,6 +165,30 @@ describe('🔐 Suite de Segurança de Produção, Hash de Senhas e OTP', () => {
 
       expect(reuseRes.status).toBe(401);
       expect(reuseRes.body.success).toBe(false);
+    });
+
+    it('deve consumir um OTP válido uma única vez mesmo em verificações concorrentes', async () => {
+      const otpReq = await userService.requestOtp('154.293.707-89', 'SMS');
+      expect(otpReq.success).toBe(true);
+      const validCode = userService.getDemoOtpCode('154.293.707-89');
+      expect(validCode).toMatch(/^\d{6}$/);
+
+      const results = await Promise.all([
+        userService.verifyOtp('154.293.707-89', validCode),
+        userService.verifyOtp('154.293.707-89', validCode),
+      ]);
+
+      expect(results.filter((result) => result.success)).toHaveLength(1);
+      expect(results.filter((result) => !result.success)).toHaveLength(1);
+    });
+
+    it('deve devolver 400 para body JSON nulo sem rejeição assíncrona da rota', async () => {
+      const res = await request(app)
+        .post('/api/auth/login')
+        .set('Content-Type', 'application/json')
+        .send('null');
+
+      expect(res.status).toBe(400);
     });
   });
 });

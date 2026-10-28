@@ -1,14 +1,23 @@
 import type { DBSPlan } from '../../types';
-import { getApiUrl, isApiServiceError, responseError, unavailableError } from './transport';
+import { apiFetch, getApiUrl, getAuthHeaders, isApiServiceError, responseError, unavailableError } from './transport';
 import { MOCK_PLANS, isDemoMode } from './demoAdapter';
 
 export async function getPlans(type?: 'URBANO' | 'WIFI6'): Promise<DBSPlan[]> {
+  if (isDemoMode()) {
+    const plans = type ? MOCK_PLANS.filter((p) => p.type === type) : MOCK_PLANS;
+    return plans.map((plan) => ({ ...plan, dataState: 'DEMO' as const }));
+  }
+
   try {
     const url = type ? `${getApiUrl()}/commercial/plans?type=${type}` : `${getApiUrl()}/commercial/plans`;
-    const res = await fetch(url);
+    const res = await apiFetch(url, { headers: getAuthHeaders() });
     if (res.ok) {
       const data = await res.json();
-      return data.plans.map((plan: DBSPlan) => ({ ...plan, dataState: 'LIVE' as const }));
+      const responseDataState = data.dataState === 'DEMO' ? 'DEMO' : 'LIVE';
+      return data.plans.map((plan: DBSPlan) => ({
+        ...plan,
+        dataState: plan.dataState || responseDataState,
+      }));
     }
     throw await responseError(res, 'Não foi possível carregar os planos.');
   } catch (e) {
@@ -20,13 +29,6 @@ export async function getPlans(type?: 'URBANO' | 'WIFI6'): Promise<DBSPlan[]> {
     }
   }
 
-  // Visible only with EXPO_PUBLIC_DEMO_MODE=true in a development build.
-  if (type) {
-    return MOCK_PLANS.filter((p) => p.type === type).map((plan) => ({
-      ...plan,
-      dataState: 'DEMO' as const,
-    }));
-  }
-  return MOCK_PLANS.map((plan) => ({ ...plan, dataState: 'DEMO' as const }));
+  return [];
 }
 

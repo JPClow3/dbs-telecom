@@ -2,7 +2,7 @@ import { Router, type Request, type Response } from 'express';
 import { CONFIG } from '../config/env.js';
 import { queueService, isKnownDepartment, type DepartmentType } from '../modules/queue/queue.service.js';
 import { authMiddleware, enforceAntiIdor, optionalAuthMiddleware, requireAdmin } from '../middlewares/auth.middleware.js';
-import { sendApiError, asyncHandler } from './route.helpers.js';
+import { routeParam, sendApiError, asyncHandler } from './route.helpers.js';
 import { registerSseResponse } from '../app.js';
 
 /**
@@ -30,7 +30,7 @@ export function registerQueueRoutes(apiRouter: Router): void {
  * nunca são processadas e impede o enfileiramento seletivo em setores alheios.
  */
 apiRouter.post('/queue/join', authMiddleware, enforceAntiIdor('clientId'), asyncHandler(async (req: Request, res: Response) => {
-  const { sessionId, clientId, clientName, department, reason } = req.body;
+  const { sessionId, clientId, clientName, department, reason } = req.body ?? {};
   const targetClientId = clientId || req.user?.clientId;
 
   if (!targetClientId) {
@@ -78,7 +78,7 @@ apiRouter.post('/queue/join', authMiddleware, enforceAntiIdor('clientId'), async
  * 👤 Transbordo / Fila Virtual - Consultar posição e tempo estimado em tempo real (Anti-IDOR)
  */
 apiRouter.get('/queue/status/:clientId', authMiddleware, enforceAntiIdor('clientId'), asyncHandler(async (req: Request, res: Response) => {
-  const { clientId } = req.params;
+  const clientId = routeParam(req, "clientId");
   const targetClientId = clientId === 'me' ? req.user!.clientId : clientId;
   const status = await queueService.getQueueStatus(targetClientId);
   return res.json(status);
@@ -92,7 +92,7 @@ apiRouter.get('/queue/stream/:clientId', optionalAuthMiddleware, (req: Request, 
   if (!req.user && !CONFIG.demoMode) {
     return res.status(401).json({ error: 'Autenticação obrigatória para acompanhar a fila.', code: 'TOKEN_MISSING' });
   }
-  const { clientId } = req.params;
+  const clientId = routeParam(req, "clientId");
   // Sem token (demonstração), o acompanhamento anônimo fica fixado no cliente
   // demo; nunca expor a fila de um clientId arbitrário sem autenticação.
   const targetClientId = req.user ? (clientId === 'me' ? req.user.clientId : clientId) : '2270';
@@ -152,7 +152,7 @@ apiRouter.get('/queue/stream/:clientId', optionalAuthMiddleware, (req: Request, 
  * 👤 Transbordo / Fila Virtual - Sair ou cancelar a fila de espera (Anti-IDOR)
  */
 apiRouter.post('/queue/leave', authMiddleware, enforceAntiIdor('clientId'), asyncHandler(async (req: Request, res: Response) => {
-  const { clientId } = req.body;
+  const { clientId } = req.body ?? {};
   const targetClientId = clientId || req.user?.clientId;
   if (!targetClientId) {
     return res.status(400).json({ error: 'clientId é obrigatório.' });
@@ -178,7 +178,7 @@ apiRouter.post('/queue/leave', authMiddleware, enforceAntiIdor('clientId'), asyn
  *   funcional inclusive nas etapas de atendente, pois é ambiente de testes.
  */
 apiRouter.post('/queue/progress', authMiddleware, enforceAntiIdor('clientId'), asyncHandler(async (req: Request, res: Response) => {
-  const { clientId } = req.body;
+  const { clientId } = req.body ?? {};
   const targetClientId = clientId || req.user?.clientId;
   if (!targetClientId) {
     return res.status(400).json({ error: 'clientId é obrigatório.' });

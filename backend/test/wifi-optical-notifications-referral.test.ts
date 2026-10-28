@@ -226,7 +226,7 @@ describe('🏢 DBS Telecom Enterprise Features Suite', () => {
         .expect(200);
 
       expect(res.body.referralCode).toBe('DBS-2270');
-      expect(res.body.referralLink).toContain('ref=DBS-2270');
+      expect(res.body.referralLink).toBe('');
       expect(res.body.friends.length).toBe(2);
 
       const activeFriend = res.body.friends.find((f: any) => f.status === 'ACTIVE_DISCOUNT');

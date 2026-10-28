@@ -3,6 +3,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import * as IntentLauncher from 'expo-intent-launcher';
 import { FormattedInvoice } from '../types';
+import { apiFetch } from './api/transport';
 
 /**
  * Erro tipado para dados insuficientes na abertura/geração do boleto.
@@ -291,7 +292,7 @@ export const pdfService = {
           if (authToken) {
             headers['Authorization'] = `Bearer ${authToken}`;
           }
-          const res = await fetch(downloadUrl, { headers });
+          const res = await apiFetch(downloadUrl, { headers });
           if (res.ok) {
             const blob = await res.blob();
             const blobUrl = window.URL.createObjectURL(blob);

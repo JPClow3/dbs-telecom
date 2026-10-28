@@ -16,6 +16,35 @@ export interface DiagnosticState {
 }
 
 export class SupportService {
+  private readonly diagnosticLocks = new Map<string, Promise<void>>();
+
+  private async withDiagnosticLock<T>(clientId: string, work: () => Promise<T>): Promise<T> {
+    const previous = this.diagnosticLocks.get(clientId) || Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => { release = resolve; });
+    this.diagnosticLocks.set(clientId, current);
+    await previous;
+    try {
+      return await work();
+    } finally {
+      release();
+      if (this.diagnosticLocks.get(clientId) === current) {
+        this.diagnosticLocks.delete(clientId);
+      }
+    }
+  }
+
+  private escalatedResult(protocolo?: string) {
+    return {
+      step: 'ESCALATED' as const,
+      message: protocolo
+        ? `🎫 **Ordem de Serviço já está aberta.**\n\nO diagnóstico deste cliente já foi escalado para o suporte técnico.\n\n📋 **Protocolo de Atendimento:** \`${protocolo}\``
+        : '🎫 **Ordem de Serviço em processamento.**\n\nO diagnóstico já foi escalado e o protocolo será disponibilizado assim que o ERP confirmar o chamado.',
+      options: ['Acompanhar chamado', 'Falar com atendente', 'Voltar ao menu'],
+      ...(protocolo ? { protocolo } : {}),
+    };
+  }
+
   private async saveState(clientId: string, state: DiagnosticState): Promise<void> {
     state.updatedAt = Date.now();
     state.clientId = clientId;
@@ -50,9 +79,25 @@ export class SupportService {
     actionRequired?: string;
     protocolo?: string;
   }> {
+    return this.withDiagnosticLock(clientId, () => this.processDiagnosticStepUnlocked(clientId, userResponse));
+  }
+
+  private async processDiagnosticStepUnlocked(clientId: string, userResponse: string): Promise<{
+    message: string;
+    step: DiagnosticStep;
+    options: string[];
+    actionRequired?: string;
+    protocolo?: string;
+  }> {
     let state = await supportRepository.getDiagnosticState(clientId);
     if (!state) {
       return await this.startDiagnostic(clientId);
+    }
+
+    // Repeating the final diagnostic action is idempotent: return the existing
+    // protocol instead of reopening a second IXC ticket.
+    if (state.step === 'ESCALATED') {
+      return this.escalatedResult(state.protocolo);
     }
 
     const lower = userResponse.toLowerCase();
@@ -97,14 +142,32 @@ export class SupportService {
           options: ['Voltar ao início', 'Ver faturas', 'Planos disponíveis'],
         };
       } else {
-        // Escalonar e abrir chamado no IXC
+        // Escalonar e abrir chamado no IXC. A transição condicional é a
+        // segunda barreira para deployments com mais de uma instância.
+        const claimed = await supportRepository.claimDiagnosticEscalation(clientId);
+        if (!claimed) {
+          const current = await supportRepository.getDiagnosticState(clientId);
+          return current?.step === 'ESCALATED'
+            ? this.escalatedResult(current.protocolo)
+            : this.startDiagnostic(clientId);
+        }
+
         state.step = 'ESCALATED';
-        const ticketRes = await ixcService.createTicket({
-          id_cliente: clientId,
-          tipo: 'C',
-          assunto: 'Reclamação de Lentidão/Instabilidade - App Mobile',
-          mensagem: `Cliente realizou o diagnóstico automatizado no aplicativo mobile (verificação de múltiplos aparelhos, cabos e reboot de 30s), mas a lentidão/queda persiste.`,
-        });
+        let ticketRes: Awaited<ReturnType<typeof ixcService.createTicket>>;
+        try {
+          ticketRes = await ixcService.createTicket({
+            id_cliente: clientId,
+            tipo: 'C',
+            assunto: 'Reclamação de Lentidão/Instabilidade - App Mobile',
+            mensagem: `Cliente realizou o diagnóstico automatizado no aplicativo mobile (verificação de múltiplos aparelhos, cabos e reboot de 30s), mas a lentidão/queda persiste.`,
+          });
+        } catch (error) {
+          // Do not leave a failed external side effect in a terminal state; a
+          // later attempt may retry the escalation exactly once.
+          state.step = 'STEP_3_RESTART';
+          await this.saveState(clientId, state);
+          throw error;
+        }
 
         state.protocolo = ticketRes.protocolo;
         state.ticketId = ticketRes.id;
@@ -151,12 +214,7 @@ export class SupportService {
 
         await supportRepository.saveUserTicket(newTicket);
 
-        return {
-          step: 'ESCALATED',
-          message: `🎫 **Ordem de Serviço Aberta com Prioridade!**\n\nComo o problema não foi solucionado pelos testes iniciais, registrei imediatamente um chamado técnico no sistema IXC da DBS Telecom:\n\n📋 **Protocolo de Atendimento:** \`${ticketRes.protocolo}\`\n\nNossa **Equipe de Suporte Técnico Avançado (Nível 2)** já recebeu a notificação com os testes realizados e está avaliando o sinal da sua porta de fibra. Entraremos em contato com você o mais breve possível!`,
-          options: ['Acompanhar chamado', 'Falar com atendente', 'Voltar ao menu'],
-          protocolo: ticketRes.protocolo,
-        };
+        return this.escalatedResult(ticketRes.protocolo);
       }
     }
 

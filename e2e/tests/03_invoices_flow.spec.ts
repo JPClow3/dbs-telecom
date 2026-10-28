@@ -51,25 +51,9 @@ test.describe('💳 3. Invoices & Financial Center Flow', () => {
   test('deve testar os botões de ação do card de fatura (Copiar Código, PIX e PDF)', async ({ page }) => {
     await expect(page.getByText('Mensalidade DBS Fibra').first()).toBeVisible({ timeout: 10000 });
 
-    const localPreview = page.getByText(/Ambiente de demonstração|Você está offline|Prévia local: confirme a fatura/i).first();
-    if (await localPreview.isVisible().catch(() => false)) {
-      await expect(page.getByRole('button', { name: /Pagar com PIX|PIX indisponível/i }).first()).toBeDisabled();
-      await expect(page.getByRole('button', { name: /Visualizar|Boleto PDF indisponível/i }).first()).toBeDisabled();
-    } else {
-      // Botão Copiar Código
-      const copyBtn = page.getByText('Copiar Código').first();
-      await copyBtn.click();
-      await expect(page.getByText(/copiado/i).first()).toBeVisible({ timeout: 5000 });
-
-      // Botão Pagar com PIX
-      const pixBtn = page.getByText('Pagar com PIX').first();
-      await pixBtn.click();
-      await expect(page.getByText(/copiado/i).first()).toBeVisible({ timeout: 5000 });
-
-      // Botão PDF
-      const pdfBtn = page.getByText('Visualizar / Baixar Boleto em PDF').first();
-      await expect(pdfBtn).toBeVisible();
-    }
+    await expect(page.getByText(/Ambiente de demonstração|Você está offline|Prévia local: confirme a fatura/i).first()).toBeVisible();
+    await expect(page.getByRole('button', { name: /Pagar com PIX|PIX indisponível/i }).first()).toBeDisabled();
+    await expect(page.getByRole('button', { name: /Visualizar|Boleto PDF indisponível/i }).first()).toBeDisabled();
   });
 
   test('deve redirecionar para o chat através do atalho de dúvidas no rodapé', async ({ page }) => {

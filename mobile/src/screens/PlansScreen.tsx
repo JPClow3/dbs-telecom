@@ -15,6 +15,7 @@ import { PlanCard } from '../components/PlanCard';
 import { SkeletonPlanCard } from '../components/Skeleton';
 import { Toast, ToastType } from '../components/Toast';
 import { apiService } from '../services/api';
+import { isDemoMode } from '../services/api/demoAdapter';
 import { useAppTheme } from '../context/ThemeContext';
 import { useNetworkStatus } from '../hooks/useNetworkStatus';
 import { hapticFeedback } from '../utils/haptics';
@@ -79,10 +80,31 @@ export const PlansScreen: React.FC<PlansScreenProps> = ({ customer, onSelectPlan
 
   const handleShareReferral = async () => {
     hapticFeedback.success();
-    // Link por cliente: usa o código do assinante logado em vez de um
-    // identificador fixo gravado no código.
-    const customerCode = customer ? `cliente-${customer.id}` : 'convidado';
-    const text = 'Venha para a DBS Telecom com 100% de fibra ótica! Use meu link e ganhe instalação gratuita: https://dbstelecom.com.br/indique/' + customerCode;
+    if (isDemoMode() || customer?.isDemo) {
+      showToast('Prévia local: compartilhamento de indicação está desativado.', 'WARNING');
+      return;
+    }
+
+    if (!customer?.id) {
+      showToast('Não foi possível identificar sua conta para compartilhar a indicação.', 'WARNING');
+      return;
+    }
+
+    let referralLink = '';
+    try {
+      const summary = await apiService.getReferralSummary(customer.id);
+      referralLink = summary.referralLink?.trim() || '';
+    } catch {
+      showToast('O link de indicação ainda não está disponível no servidor.', 'WARNING');
+      return;
+    }
+
+    if (!/^https:\/\//i.test(referralLink)) {
+      showToast('O link de indicação ainda não está disponível no servidor.', 'WARNING');
+      return;
+    }
+
+    const text = 'Venha para a DBS Telecom com 100% de fibra ótica! Use meu link e ganhe instalação gratuita: ' + referralLink;
     if (Platform.OS === 'web') {
       try {
         if (!navigator.clipboard) throw new Error('Clipboard indisponível');
@@ -323,9 +345,12 @@ export const PlansScreen: React.FC<PlansScreenProps> = ({ customer, onSelectPlan
         <TouchableOpacity
           style={[styles.referralShareBtn, { backgroundColor: colors.primaryLight }]}
           onPress={handleShareReferral}
+          disabled={isDemoMode() || customer?.isDemo}
           activeOpacity={0.75}
           accessibilityRole="button"
-          accessibilityLabel="Copiar ou compartilhar meu link de indicação"
+          accessibilityLabel={isDemoMode() || customer?.isDemo
+            ? 'Compartilhar indicação — indisponível na prévia local'
+            : 'Copiar ou compartilhar meu link de indicação'}
         >
           <Share2 size={14} color={isDark ? '#FFA07A' : colors.primaryDark} strokeWidth={2.2} />
         </TouchableOpacity>

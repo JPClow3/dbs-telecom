@@ -6,6 +6,7 @@ import {
   getAuthToken,
   isNetworkTimeoutError,
   NetworkTimeoutError,
+  getApiUrl,
   setAuthToken,
 } from '../src/services/api/transport';
 import {
@@ -23,6 +24,7 @@ import {
 } from '../src/utils/outbox';
 import type { OutboxEntry } from '../src/utils/outbox';
 import { resolveAuthFailure } from '../src/services/api/policies';
+import { sendMessage } from '../src/services/api/chat';
 
 // ---------------------------------------------------------------------------
 // Stubs compartilhados
@@ -55,10 +57,12 @@ beforeEach(() => {
   __resetSessionEventsForTests();
   setOutboxStorage(makeMemoryStorage());
   setAuthToken(null);
+  process.env.EXPO_PUBLIC_API_URL = 'https://api.test';
 });
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
+  delete process.env.EXPO_PUBLIC_API_URL;
 });
 
 // ---------------------------------------------------------------------------
@@ -66,6 +70,18 @@ afterEach(() => {
 // ---------------------------------------------------------------------------
 
 describe('network timeouts', () => {
+  it('prefers EXPO_PUBLIC_API_URL over the browser origin for separately hosted deployments', () => {
+    const previousWindow = (globalThis as any).window;
+    (globalThis as any).window = { location: { origin: 'https://app.example.test' } };
+    process.env.EXPO_PUBLIC_API_URL = 'https://api.example.test/custom-api/';
+
+    try {
+      assert.equal(getApiUrl(), 'https://api.example.test/custom-api');
+    } finally {
+      (globalThis as any).window = previousWindow;
+    }
+  });
+
   it('throws NetworkTimeoutError ("Tempo limite excedido") when the server never answers', async () => {
     let observedSignal: AbortSignal | undefined;
     globalThis.fetch = ((_url: string, init?: RequestInit) => {
@@ -131,6 +147,32 @@ describe('network timeouts', () => {
     assert.equal(res.status, 200);
     assert.equal(cleared, true);
     assert.ok(Date.now() - realCreateTimeout < 1000);
+  });
+
+  it('mantém o abort do chamador conectado ao corpo de um stream sem timeout', async () => {
+    let fetchSignal: AbortSignal | undefined;
+    globalThis.fetch = ((_url: string, init?: RequestInit) => {
+      fetchSignal = init?.signal || undefined;
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          fetchSignal?.addEventListener('abort', () => {
+            controller.error(fetchSignal?.reason ?? new Error('The operation was aborted'));
+          }, { once: true });
+        },
+      });
+      return Promise.resolve(new Response(body, { status: 200 }));
+    }) as typeof fetch;
+
+    const controller = new AbortController();
+    const response = await apiFetch('https://api.test/stream', {
+      signal: controller.signal,
+      noTimeout: true,
+    });
+    const read = response.body!.getReader().read();
+    controller.abort();
+
+    await assert.rejects(read);
+    assert.equal(fetchSignal, controller.signal);
   });
 });
 
@@ -231,11 +273,18 @@ describe('auth expiry handling', () => {
 // ---------------------------------------------------------------------------
 
 describe('outbox', () => {
-  it('enqueue persists messages in storage and list() returns them in order', async () => {
-    await enqueue('session-1', 'primeira mensagem', new Date('2026-01-01T10:00:00Z'));
-    await enqueue('session-1', 'segunda mensagem', new Date('2026-01-01T10:00:05Z'));
+  it('recusa flush sem um cliente explícito', async () => {
+    await assert.rejects(
+      () => flush(async () => undefined, { clientId: '' }),
+      /clientId é obrigatório/,
+    );
+  });
 
-    const entries = await list();
+  it('enqueue persists messages in storage and list() returns them in order', async () => {
+    await enqueue('session-1', 'primeira mensagem', new Date('2026-01-01T10:00:00Z'), { clientId: 'client-a' });
+    await enqueue('session-1', 'segunda mensagem', new Date('2026-01-01T10:00:05Z'), { clientId: 'client-a' });
+
+    const entries = await list('client-a');
     assert.equal(entries.length, 2);
     assert.equal(entries[0].text, 'primeira mensagem');
     assert.equal(entries[1].text, 'segunda mensagem');
@@ -244,32 +293,32 @@ describe('outbox', () => {
   });
 
   it('flush delivers pending messages through the same send path and removes them', async () => {
-    await enqueue('session-9', 'mensagem offline', new Date());
+    await enqueue('session-9', 'mensagem offline', new Date(), { clientId: 'client-a', clientMessageId: 'mobile-msg-1' });
     const sentPayloads: string[] = [];
 
     const result = await flush(async (entry: OutboxEntry) => {
       sentPayloads.push(`${entry.sessionId}:${entry.text}`);
-    });
+    }, { clientId: 'client-a' });
 
     assert.deepEqual(sentPayloads, ['session-9:mensagem offline']);
     assert.equal(result.delivered.length, 1);
     assert.equal(result.permanentlyFailed.length, 0);
-    assert.deepEqual(await list(), [], 'outbox vazia após entrega');
+    assert.deepEqual(await list('client-a'), [], 'outbox vazia após entrega');
   });
 
   it('flush removes only delivered entries when the first send fails mid-batch', async () => {
-    await enqueue('s', 'falha', new Date('2026-01-01T00:00:00Z'));
-    await enqueue('s', 'sucesso', new Date('2026-01-01T00:00:01Z'));
+    await enqueue('s', 'falha', new Date('2026-01-01T00:00:00Z'), { clientId: 'client-a' });
+    await enqueue('s', 'sucesso', new Date('2026-01-01T00:00:01Z'), { clientId: 'client-a' });
 
     let calls = 0;
     const result = await flush(async (entry) => {
       calls += 1;
       if (entry.text === 'falha') throw new Error('ainda offline');
-    });
+    }, { clientId: 'client-a' });
 
     assert.equal(calls, 1, 'para na primeira falha para não queimar tentativas');
     assert.deepEqual(result.delivered, []);
-    const remaining = await list();
+    const remaining = await list('client-a');
     // A entrada que falhou permanece (tentativa recuperável) junto da que
     // não chegou a ser tentada nesta rodada.
     assert.equal(remaining.length, 2);
@@ -280,37 +329,67 @@ describe('outbox', () => {
     assert.equal(pendingEntry?.attempts, 0, 'não tentada, nenhuma queima');
   });
 
-  it('caps retries at 3, then reports permanent failure once and clears the entry', async () => {
-    const entry = await enqueue('session-x', 'nunca entregue', new Date());
+  it('caps retries at 3, reports permanent failure once and keeps the entry for recovery', async () => {
+    const entry = await enqueue('session-x', 'nunca entregue', new Date(), { clientId: 'client-a' });
     const failingSend = async () => {
       throw new Error('offline');
     };
 
     // Rodadas 1 e 2: falha registrada, ainda recuperável.
-    const round1 = await flush(failingSend);
+    const round1 = await flush(failingSend, { clientId: 'client-a' });
     assert.equal(round1.permanentlyFailed.length, 0);
-    assert.equal((await list())[0].attempts, 1);
+    assert.equal((await list('client-a'))[0].attempts, 1);
 
-    await flush(failingSend);
-    const round3 = await flush(failingSend);
+    await flush(failingSend, { clientId: 'client-a' });
+    const round3 = await flush(failingSend, { clientId: 'client-a' });
 
     assert.equal(round3.permanentlyFailed.length, 1, 'toast único na 3ª falha');
     assert.equal(round3.permanentlyFailed[0].id, entry.id);
-    assert.deepEqual(await list(), [], 'entrada descartada após esgotar tentativas');
+    assert.equal((await list('client-a'))[0].id, entry.id, 'entrada preservada até confirmação/ação do usuário');
+
+    const round4 = await flush(failingSend, { clientId: 'client-a' });
+    assert.equal(round4.permanentlyFailed.length, 0, 'não tenta indefinidamente uma entrada já esgotada');
+    assert.equal((await list('client-a'))[0].attempts, 3);
   });
 
   it('remove() deletes exactly the delivered id and markFailed counts attempts', async () => {
-    const kept = await enqueue('s', 'fica', new Date());
-    const gone = await enqueue('s', 'sai', new Date());
+    const kept = await enqueue('s', 'fica', new Date(), { clientId: 'client-a' });
+    const gone = await enqueue('s', 'sai', new Date(), { clientId: 'client-a' });
 
-    await remove(gone.id);
-    let entries = await list();
+    await remove(gone.id, 'client-a');
+    let entries = await list('client-a');
     assert.deepEqual(entries.map((e) => e.text), ['fica']);
 
-    assert.equal(await markFailed(kept.id), false, '1 tentativa < cap de 3');
-    assert.equal(await markFailed(kept.id), false);
-    assert.equal(await markFailed(kept.id), true, '3 tentativas esgotam o cap');
-    entries = await list();
+    assert.equal(await markFailed(kept.id, 'client-a'), false, '1 tentativa < cap de 3');
+    assert.equal(await markFailed(kept.id, 'client-a'), false);
+    assert.equal(await markFailed(kept.id, 'client-a'), true, '3 tentativas esgotam o cap');
+    entries = await list('client-a');
     assert.equal(entries[0].attempts, 3);
+  });
+
+  it('associa a fila ao cliente e nunca reenvia mensagens de outro cliente', async () => {
+    await enqueue('session-a', 'mensagem do cliente A', new Date(), { clientId: 'client-a', clientMessageId: 'a-1' });
+    await enqueue('session-b', 'mensagem do cliente B', new Date(), { clientId: 'client-b', clientMessageId: 'b-1' });
+
+    assert.deepEqual((await list('client-b')).map((entry) => entry.text), ['mensagem do cliente B']);
+
+    const sent: string[] = [];
+    await flush(async (entry) => sent.push(entry.text), { clientId: 'client-b' });
+    assert.deepEqual(sent, ['mensagem do cliente B']);
+    assert.deepEqual((await list('client-a')).map((entry) => entry.text), ['mensagem do cliente A']);
+  });
+
+  it('enfileira a mensagem quando o transporte falha antes de o servidor confirmar recebimento', async () => {
+    globalThis.fetch = (async () => {
+      throw new Error('network offline');
+    }) as typeof fetch;
+
+    const reply = await sendMessage('mensagem offline', 'session-offline', 'client-offline', 'mobile-offline-1');
+
+    assert.equal(reply.dataState, 'UNAVAILABLE');
+    const pending = await list('client-offline');
+    assert.equal(pending.length, 1);
+    assert.equal(pending[0].clientMessageId, 'mobile-offline-1');
+    assert.equal(pending[0].text, 'mensagem offline');
   });
 });

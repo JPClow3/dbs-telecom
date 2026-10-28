@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { aiService } from '../modules/ai/ai.service.js';
 import { ixcContextBuilder } from '../modules/ai/ixc-context.builder.js';
 import { authMiddleware, enforceAntiIdor } from '../middlewares/auth.middleware.js';
-import { sendApiError } from './route.helpers.js';
+import { routeParam, sendApiError } from './route.helpers.js';
 
 /**
  * Custo de IA é proporcional ao tamanho do prompt: sem limite de entrada, um
@@ -39,7 +39,7 @@ apiRouter.post('/ai/classify', authMiddleware, enforceAntiIdor('clientId'), asyn
     });
   }
 
-  const { message, clientId } = req.body;
+  const { message, clientId } = req.body ?? {};
   const targetClientId = clientId || req.user?.clientId;
 
   try {
@@ -54,7 +54,7 @@ apiRouter.post('/ai/classify', authMiddleware, enforceAntiIdor('clientId'), asyn
  * Visualização do Bundle de Contexto do IXC construído para um cliente (Anti-IDOR)
  */
 apiRouter.get('/ai/context/:clientId', authMiddleware, enforceAntiIdor('clientId'), async (req: Request, res: Response) => {
-  const { clientId } = req.params;
+  const clientId = routeParam(req, "clientId");
   const targetClientId = clientId === 'me' ? req.user!.clientId : clientId;
   try {
     const bundle = await ixcContextBuilder.buildContext(targetClientId);

@@ -83,8 +83,8 @@ export class QueueService {
 
   /**
    * Executa o handler em uma cadeia serializada por clientId. Em um único
-   * processo Node isso elimina a condição de corrida do check-then-insert;
-   * múltiplas instâncias continuam cobertas pela checagem de entrada ativa.
+   * processo Node isso reduz contenção; a restrição UNIQUE parcial no banco é
+   * a autoridade que também cobre múltiplas instâncias.
    */
   private withClientLock<T>(clientId: string, handler: () => Promise<T>): Promise<T> {
     const previous = this.clientLocks.get(clientId) || Promise.resolve();
@@ -122,10 +122,10 @@ export class QueueService {
     department: DepartmentType;
     reason?: string;
   }): Promise<QueueEntry> {
-    const existing = await queueRepository.getByClientOrSession(params.clientId);
-    if (existing && (existing.status === 'QUEUED' || existing.status === 'ASSIGNED' || existing.status === 'IN_SERVICE')) {
+    const existing = await queueRepository.getActiveByClient(params.clientId);
+    if (existing) {
       await this.recalculatePositions();
-      const updated = await queueRepository.getByClientOrSession(params.clientId) || existing;
+      const updated = await queueRepository.getActiveByClient(params.clientId) || existing;
       this.notifyUpdate(updated);
       return updated;
     }
@@ -154,10 +154,21 @@ export class QueueService {
       joinedAt: now,
     };
 
-    await queueRepository.upsert(newEntry);
+    try {
+      // Plain INSERT lets the partial unique index reject a concurrent
+      // admission instead of silently overwriting queue history.
+      await queueRepository.insert(newEntry);
+    } catch (error) {
+      if (!isUniqueViolation(error)) throw error;
+      await this.recalculatePositions();
+      const concurrentEntry = await queueRepository.getActiveByClient(params.clientId);
+      if (!concurrentEntry) throw error;
+      this.notifyUpdate(concurrentEntry);
+      return concurrentEntry;
+    }
     await this.recalculatePositions();
 
-    const saved = await queueRepository.getByClientOrSession(params.clientId) || newEntry;
+    const saved = await queueRepository.getActiveByClient(params.clientId) || newEntry;
     this.notifyUpdate(saved);
     return saved;
   }
@@ -315,6 +326,13 @@ export class QueueService {
   async getStats() {
     return await queueRepository.getStats();
   }
+}
+
+function isUniqueViolation(error: unknown): boolean {
+  const value = error as { code?: unknown; message?: unknown } | null;
+  const code = String(value?.code || '');
+  const message = String(value?.message || error || '');
+  return code === '23505' || /unique constraint|duplicate key|already exists/i.test(message);
 }
 
 export const queueService = new QueueService();

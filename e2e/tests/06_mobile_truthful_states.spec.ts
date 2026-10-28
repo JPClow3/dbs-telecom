@@ -25,17 +25,9 @@ test.describe('📱 Mobile source: truthful provider and action states', () => {
 
   test('bloqueia ações financeiras quando a fatura é apenas prévia local', async ({ page }) => {
     await page.getByText('2ª Via Fatura').click();
-    const previewNotice = page.getByText(/Ambiente de demonstração|Você está offline|Prévia local: confirme a fatura/i).first();
-
-    if (await previewNotice.isVisible().catch(() => false)) {
-      await expect(page.getByRole('button', { name: /PIX indisponível|Pagar com PIX/i }).first()).toBeDisabled();
-      await expect(page.getByRole('button', { name: /Boleto PDF indisponível|Visualizar/i }).first()).toBeDisabled();
-    } else {
-      // Online provider responses remain actionable, while still exposing the
-      // explicit account data surface and accessible tab controls.
-      await expect(page.getByRole('button', { name: /Em Aberto/i }).first()).toBeVisible();
-      await expect(page.getByRole('button', { name: /Pagas/i }).first()).toBeVisible();
-    }
+    await expect(page.getByText(/Ambiente de demonstração|Você está offline|Prévia local: confirme a fatura/i).first()).toBeVisible();
+    await expect(page.getByRole('button', { name: /PIX indisponível|Pagar com PIX/i }).first()).toBeDisabled();
+    await expect(page.getByRole('button', { name: /Boleto PDF indisponível|Visualizar/i }).first()).toBeDisabled();
   });
 
   test('mantém as ferramentas de perfil em proveniência demo', async ({ page }) => {

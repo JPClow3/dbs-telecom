@@ -133,6 +133,10 @@ function splitIntoDeliveryChunks(text: string): string[] {
 }
 
 export class ChatService {
+  private static readonly CHAT_IDEMPOTENCY_WAIT_MS = 30_000;
+  private static readonly CHAT_IDEMPOTENCY_POLL_MS = 50;
+  private static readonly CHAT_IDEMPOTENCY_LEASE_MS = 60_000;
+
   /** Limite de sessões em memória para evitar crescimento descontrolado. */
   private static readonly MAX_CACHED_SESSIONS = 200;
 
@@ -325,6 +329,80 @@ export class ChatService {
     return greetingMsg;
   }
 
+  private makeIdempotencyKey(sessionId: string, clientId: string | undefined, clientMessageId: string): string {
+    return `chat:${clientId || 'anonymous'}:${sessionId}:${clientMessageId}`;
+  }
+
+  private async waitForPersistentIdempotency(
+    key: string,
+    sessionId: string,
+    clientId: string | undefined,
+    clientMessageId: string,
+  ): Promise<{ ownerToken?: string; response?: ChatMessage }> {
+    const waitUntil = Date.now() + ChatService.CHAT_IDEMPOTENCY_WAIT_MS;
+    while (Date.now() < waitUntil) {
+      const staleBefore = new Date(Date.now() - ChatService.CHAT_IDEMPOTENCY_LEASE_MS).toISOString();
+      const claim = await chatRepository.claimChatIdempotency(
+        key,
+        sessionId,
+        clientId,
+        clientMessageId,
+        staleBefore,
+      );
+      if (claim.claimed) return { ownerToken: claim.ownerToken };
+      if (!claim.pending) return { response: claim.response };
+      await new Promise<void>((resolve) => setTimeout(resolve, ChatService.CHAT_IDEMPOTENCY_POLL_MS));
+    }
+
+    const error = new Error('Outra instância ainda está processando esta mensagem. Tente novamente em instantes.');
+    (error as Error & { code?: string }).code = 'CHAT_IDEMPOTENCY_PENDING';
+    throw error;
+  }
+
+  private async runMessageWithIdempotency(
+    sessionId: string,
+    clientId: string | undefined,
+    clientMessageId: string | undefined,
+    work: () => Promise<ChatMessage>,
+  ): Promise<{ value: ChatMessage; duplicate: boolean }> {
+    if (!clientMessageId?.trim()) {
+      return { value: await work(), duplicate: false };
+    }
+
+    const stableMessageId = clientMessageId.trim();
+    const key = this.makeIdempotencyKey(sessionId, clientId, stableMessageId);
+    const execution = await chatIdempotency.run(key, async () => {
+      const claim = await this.waitForPersistentIdempotency(
+        key,
+        sessionId,
+        clientId,
+        stableMessageId,
+      );
+      if (claim.response) {
+        return { value: claim.response, duplicate: true };
+      }
+
+      try {
+        const value = await work();
+        const completed = await chatRepository.completeChatIdempotency(key, claim.ownerToken!, value);
+        if (!completed) {
+          throw Object.assign(new Error('A posse da idempotência da mensagem foi perdida.'), {
+            code: 'CHAT_IDEMPOTENCY_OWNERSHIP_LOST',
+          });
+        }
+        return { value, duplicate: false };
+      } catch (error) {
+        await chatRepository.releaseChatIdempotency(key, claim.ownerToken!);
+        throw error;
+      }
+    });
+
+    return {
+      value: execution.value.value,
+      duplicate: execution.duplicate || execution.value.duplicate,
+    };
+  }
+
   /**
    * Processa a mensagem do cliente com Fast Router / IA Gemini / Guardrails / IXC
    *
@@ -338,25 +416,31 @@ export class ChatService {
     clientId?: string,
     options: { clientMessageId?: string } = {}
   ): Promise<ChatMessage> {
-    const idempotencyKey = options.clientMessageId
-      ? `chat:${sessionId}:${options.clientMessageId}`
-      : `chat:${sessionId}:auto-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-
-    const { value } = await chatIdempotency.run(idempotencyKey, () =>
-      processChatMessage(
-        {
-          getOrCreateSession: this.getOrCreateSession.bind(this),
-          pushHistory: this.pushHistory.bind(this),
-        },
-        sessionId,
-        userText,
-        clientId,
-        // O turno do usuário recebe o messageId do cliente como id estável;
-        // o upsert por id no SQLite converge retries em vez de duplicar.
-        { clientMessageId: options.clientMessageId }
-      )
-    );
+    const { value } = await this.runMessageWithIdempotency(sessionId, clientId, options.clientMessageId, () => this.processMessageInternal(
+      sessionId,
+      userText,
+      clientId,
+      options.clientMessageId,
+    ));
     return value;
+  }
+
+  private processMessageInternal(
+    sessionId: string,
+    userText: string,
+    clientId?: string,
+    clientMessageId?: string,
+  ): Promise<ChatMessage> {
+    return processChatMessage(
+      {
+        getOrCreateSession: this.getOrCreateSession.bind(this),
+        pushHistory: this.pushHistory.bind(this),
+      },
+      sessionId,
+      userText,
+      clientId,
+      { clientMessageId },
+    );
   }
 
   /**
@@ -389,13 +473,14 @@ export class ChatService {
     // Idempotência: a mesma mensagem do cliente (mesmo messageId) nunca executa
     // o pipeline duas vezes — evita ticket duplicado, mensagem repetida no
     // histórico e entrada dupla na fila quando o cliente reenvia após falha.
-    const idempotencyKey = clientMessageId
-      ? `chat:${sessionId}:${clientMessageId}`
-      : `chat:${sessionId}:auto-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-
-    const { value: finalBotMessage, duplicate } = await chatIdempotency.run(idempotencyKey, async () => {
+    const { value: finalBotMessage, duplicate } = await this.runMessageWithIdempotency(sessionId, currentClientId, clientMessageId, async () => {
       onStage?.('classificando');
-      const message = await this.processMessage(sessionId, userText, currentClientId);
+      const message = await this.processMessageInternal(
+        sessionId,
+        userText,
+        currentClientId,
+        clientMessageId,
+      );
       onStage?.('compondo_resposta');
       return message;
     });

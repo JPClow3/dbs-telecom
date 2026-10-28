@@ -34,21 +34,15 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction) 
   }
 
   try {
-    const user = jwtService.verifyToken(token);
-    if (!user.clientId || (user.role && user.role !== 'admin' && user.role !== 'client')) {
-      throw new Error('invalid claims');
-    }
-    // Revogação: tokens emitidos antes de uma troca de senha carregam uma
-    // sessionVersion menor que a atual e são rejeitados aqui.
-    if (!userService.isTokenSessionValid(user.clientId, user.sessionVersion)) {
+    req.user = verifyAuthenticatedToken(token);
+    return next();
+  } catch (error: any) {
+    if (error?.code === 'SESSION_REVOKED') {
       return res.status(401).json({
         error: 'Não autorizado: sessão encerrada. Faça login novamente.',
         code: 'SESSION_REVOKED',
       });
     }
-    req.user = user;
-    return next();
-  } catch {
     return res.status(401).json({
       error: 'Não autorizado: Token JWT inválido, expirado ou corrompido.',
       code: 'TOKEN_INVALID',
@@ -68,18 +62,14 @@ export function optionalAuthMiddleware(req: Request, res: Response, next: NextFu
       return res.status(401).json({ error: 'Token JWT não fornecido.', code: 'TOKEN_MISSING' });
     }
     try {
-      const user = jwtService.verifyToken(token);
-      if (!user.clientId || (user.role && user.role !== 'admin' && user.role !== 'client')) {
-        throw new Error('invalid claims');
-      }
-      if (!userService.isTokenSessionValid(user.clientId, user.sessionVersion)) {
+      req.user = verifyAuthenticatedToken(token);
+    } catch (error: any) {
+      if (error?.code === 'SESSION_REVOKED') {
         return res.status(401).json({
           error: 'Não autorizado: sessão encerrada. Faça login novamente.',
           code: 'SESSION_REVOKED',
         });
       }
-      req.user = user;
-    } catch {
       return res.status(401).json({
         error: 'Token JWT inválido, expirado ou corrompido.',
         code: 'TOKEN_INVALID',
@@ -88,6 +78,24 @@ export function optionalAuthMiddleware(req: Request, res: Response, next: NextFu
   }
 
   return next();
+}
+
+/**
+ * Verifica um token fora do pipeline Express (por exemplo, no SSE que aceita
+ * `?token=`). Manter assinatura, claims e revogação nesta única fronteira
+ * evita que transportes alternativos criem uma sessão menos segura.
+ */
+export function verifyAuthenticatedToken(token: string): AuthUserPayload {
+  const user = jwtService.verifyToken(token);
+  if (!user.clientId || (user.role && user.role !== 'admin' && user.role !== 'client')) {
+    throw new Error('invalid claims');
+  }
+  if (!userService.isTokenSessionValid(user.clientId, user.sessionVersion)) {
+    const error = new Error('session revoked') as Error & { code?: string };
+    error.code = 'SESSION_REVOKED';
+    throw error;
+  }
+  return user;
 }
 
 /** Garante que apenas uma identidade administrativa assine operações de suporte. */

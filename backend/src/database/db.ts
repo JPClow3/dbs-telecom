@@ -117,6 +117,17 @@ class SqliteDatabaseAdapter implements IDatabase {
         guardrail_applied INTEGER NOT NULL DEFAULT 0,
         cards TEXT
       );
+      CREATE TABLE IF NOT EXISTS chat_idempotency (
+        idempotency_key TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        client_id TEXT,
+        client_message_id TEXT NOT NULL,
+        owner_token TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'PENDING',
+        response_json TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS queue_entries (
         queue_id TEXT PRIMARY KEY,
         session_id TEXT NOT NULL,
@@ -132,6 +143,9 @@ class SqliteDatabaseAdapter implements IDatabase {
         completed_at TEXT,
         assigned_agent TEXT
       );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_queue_one_active_per_client
+        ON queue_entries(client_id)
+        WHERE status IN ('QUEUED', 'ASSIGNED', 'IN_SERVICE');
       CREATE TABLE IF NOT EXISTS csat_feedbacks (
         id TEXT PRIMARY KEY,
         client_id TEXT NOT NULL,
@@ -246,12 +260,14 @@ class SqliteDatabaseAdapter implements IDatabase {
         end_to_end_id TEXT,
         amount TEXT NOT NULL,
         paid_at TEXT NOT NULL,
-        webhook_event_id TEXT NOT NULL
+        webhook_event_id TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
 
       -- Índices equivalentes aos da migração Postgres, para que os testes
       -- com o adapter in-memory exerçam planos de consulta semelhantes.
       CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(session_id);
+      CREATE INDEX IF NOT EXISTS idx_chat_idempotency_updated ON chat_idempotency(status, updated_at);
       CREATE INDEX IF NOT EXISTS idx_queue_client_status ON queue_entries(client_id, status);
       CREATE INDEX IF NOT EXISTS idx_queue_dept_status ON queue_entries(department, status, joined_at);
       CREATE INDEX IF NOT EXISTS idx_csat_client ON csat_feedbacks(client_id);

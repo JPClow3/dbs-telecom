@@ -13,7 +13,7 @@ import {
   Linking,
 } from 'react-native';
 import { SHADOWS, RADIUS } from '../constants/theme';
-import { apiService, setAuthToken, startDemoMode } from '../services/api';
+import { apiService, deactivateDemoMode, setAuthToken, startDemoMode } from '../services/api';
 import { storageService } from '../services/storage';
 import { biometricsService, BiometricCapability } from '../services/biometrics';
 import { useAppTheme } from '../context/ThemeContext';
@@ -142,6 +142,9 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
       const res = await apiService.loginClient(doc, pass);
       if (res.found && res.authenticated && res.token && res.client) {
         hapticFeedback.success();
+        // A previous local shortcut can stay active in the same JS runtime.
+        // Keep the newly issued server token and switch chat back to Gemini.
+        deactivateDemoMode();
         // The customer is not an authentication proof; persist the signed token
         // and customer atomically before entering the authenticated tree.
         await storageService.saveAuthSession({
@@ -198,6 +201,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
       // Biometric re-auth may restore a complete token-backed session only. It
       // must never turn an identity-only record into an authenticated session.
       setAuthToken(session.token);
+      deactivateDemoMode();
       onLoginSuccess(session.customer);
     } else if (result.error) {
       hapticFeedback.warning();

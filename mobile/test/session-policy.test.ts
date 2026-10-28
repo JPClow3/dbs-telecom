@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { normalizeAuthSession, parseAuthSession } from '../src/services/sessionPolicy';
+import { authorizeRestoredSession, normalizeAuthSession, parseAuthSession } from '../src/services/sessionPolicy';
 
 const customer = {
   id: 'customer-1',
@@ -47,5 +47,26 @@ describe('mobile authentication session policy', () => {
       normalizeAuthSession({ customer, token: '  opaque-token  ', mode: 'unexpected' }),
       { customer, token: 'opaque-token', mode: 'live' }
     );
+  });
+
+  it('exige biometria antes de autorizar uma sessão restaurada', async () => {
+    const session = normalizeAuthSession({ customer, token: 'opaque-token' });
+    assert.ok(session);
+
+    const denied = await authorizeRestoredSession(session, true, async () => ({ success: false }));
+    assert.equal(denied, null);
+
+    const allowed = await authorizeRestoredSession(session, true, async () => ({ success: true }));
+    assert.deepEqual(allowed, session);
+  });
+
+  it('falha fechado se a autenticação biométrica lançar erro ao restaurar a sessão', async () => {
+    const session = normalizeAuthSession({ customer, token: 'opaque-token' });
+    assert.ok(session);
+
+    const restored = await authorizeRestoredSession(session, true, async () => {
+      throw new Error('biometria indisponível');
+    });
+    assert.equal(restored, null);
   });
 });

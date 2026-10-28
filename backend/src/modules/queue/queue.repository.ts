@@ -8,6 +8,15 @@ const entrySelect = `
   FROM queue_entries`;
 
 export class QueueRepository {
+  async insert(entry: QueueEntry): Promise<void> {
+    await getDatabase().prepare(`
+      INSERT INTO queue_entries (queue_id, session_id, client_id, client_name, department, reason, status, position, estimated_wait_minutes, joined_at, assigned_at, completed_at, assigned_agent)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(entry.queueId, entry.sessionId, entry.clientId, entry.clientName, entry.department, entry.reason || null,
+      entry.status, entry.position, entry.estimatedWaitMinutes, entry.joinedAt, entry.assignedAt || null,
+      entry.completedAt || null, entry.assignedAgent ? JSON.stringify(entry.assignedAgent) : null);
+  }
+
   async upsert(entry: QueueEntry): Promise<void> {
     await getDatabase().prepare(`
       INSERT INTO queue_entries (queue_id, session_id, client_id, client_name, department, reason, status, position, estimated_wait_minutes, joined_at, assigned_at, completed_at, assigned_agent)
@@ -24,6 +33,13 @@ export class QueueRepository {
 
   async getByClientOrSession(identifier: string): Promise<QueueEntry | undefined> {
     const row = await getDatabase().prepare(`${entrySelect} WHERE client_id = ? OR session_id = ? ORDER BY joined_at DESC LIMIT 1`).get<any>(identifier, identifier);
+    return row ? this.mapRow(row) : undefined;
+  }
+
+  async getActiveByClient(clientId: string): Promise<QueueEntry | undefined> {
+    const row = await getDatabase().prepare(`${entrySelect}
+      WHERE client_id = ? AND status IN ('QUEUED', 'ASSIGNED', 'IN_SERVICE')
+      ORDER BY joined_at DESC LIMIT 1`).get<any>(clientId);
     return row ? this.mapRow(row) : undefined;
   }
 
@@ -45,11 +61,12 @@ export class QueueRepository {
   async getQueuedByDepartmentRanked(department: DepartmentType): Promise<QueueEntry[]> {
     const rows = await getDatabase().prepare(`
       SELECT queue_id, session_id, client_id, client_name, department, reason, status, position,
-             estimated_wait_minutes, joined_at, assigned_at, completed_at, assigned_agent
+             estimated_wait_minutes, joined_at, assigned_at, completed_at, assigned_agent, computed_position
       FROM (
         SELECT *, ROW_NUMBER() OVER (ORDER BY joined_at ASC, queue_id ASC) AS computed_position
         FROM queue_entries WHERE department = ? AND status = 'QUEUED'
       ) ranked
+      ORDER BY computed_position ASC
     `).all<any>(department);
     return rows.map((row) => {
       const entry = this.mapRow(row);

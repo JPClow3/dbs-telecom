@@ -301,7 +301,12 @@ export class UserService {
       };
     }
 
-    await userRepository.markOtpUsed(activeOtp.id);
+    // Only the request that atomically claims the row may complete the login.
+    // This closes the read-then-update race between concurrent verifications.
+    const claimed = await userRepository.claimOtp(activeOtp.id, normalizedIdentifier);
+    if (!claimed) {
+      return { success: false, message: 'Código inválido, expirado ou já utilizado.' };
+    }
     if (CONFIG.demoMode) this.demoOtpCodes.delete(normalizedIdentifier);
     const accountResult = await this.registerUserAccount(client);
 
@@ -320,12 +325,14 @@ export class UserService {
    * O banco persiste somente o hash dessa credencial.
    */
   async syncUsersFromIXC(limit: number = 50): Promise<{ totalProcessed: number; users: UserAccount[]; credentials?: Array<{ clientId: string; login: string; initialPassword: string }> }> {
+    const parsedLimit = Number.isFinite(limit) ? Math.floor(limit) : 50;
+    const safeLimit = Math.min(100, Math.max(1, parsedLimit));
     const res = await ixcService.query<IXCClientRecord>('cliente', {
       qtype: 'cliente.id',
       query: '0',
       oper: '>',
       page: '1',
-      rp: String(limit),
+      rp: String(safeLimit),
       sortname: 'cliente.id',
       sortorder: 'desc',
     });

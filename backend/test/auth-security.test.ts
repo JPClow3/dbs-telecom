@@ -26,6 +26,17 @@ describe('🔐 Suite de Segurança de Autenticação (hardening)', () => {
   });
 
   describe('🕵️ 1. Anti-enumeração no login (/api/auth/login)', () => {
+    it('mantém a expiração JWT e o campo expiresIn no mesmo contrato de 24 horas', async () => {
+      const res = await request(app)
+        .post('/api/auth/login')
+        .send({ cpfCnpj: '154.293.707-89', password: '15429370789' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.expiresIn).toBe('24h');
+      const payload = jwtService.verifyToken(res.body.token);
+      expect(payload.exp! - payload.iat!).toBe(24 * 60 * 60);
+    });
+
     it('retorna corpo e status idênticos para CPF desconhecido e senha incorreta', async () => {
       // Caso A: CPF que não existe na base
       const unknownDoc = await request(app)
@@ -129,6 +140,17 @@ describe('🔐 Suite de Segurança de Autenticação (hardening)', () => {
       expect(res.body.contracts).toBeUndefined();
     });
 
+    it('não permite que um cliente consulte o documento de outro cliente', async () => {
+      const token = legacyTokenFor('2270', '154.293.707-89');
+      const res = await request(app)
+        .post('/api/auth/identify')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ cpfCnpj: '999.999.999-99' });
+
+      expect(res.status).toBe(403);
+      expect(res.body.code).toBe('IDOR_FORBIDDEN');
+    });
+
     it('aplica rate limit rígido de 5 requisições por minuto por IP', async () => {
       const token = legacyTokenFor('2270', '154.293.707-89');
       const doIdentify = () => request(app)
@@ -153,6 +175,29 @@ describe('🔐 Suite de Segurança de Autenticação (hardening)', () => {
       }
       // 5/min por IP: com no máximo 4 créditos restantes, 10 tentativas bastam
       expect(gotLimited).toBe(true);
+    });
+  });
+
+  describe('📦 3.1. Limite da sincronização administrativa', () => {
+    it('limita o lote solicitado ao IXC mesmo quando o operador envia um valor enorme', async () => {
+      const query = vi.spyOn(ixcService, 'query').mockResolvedValue({ registros: [], total: 0 } as any);
+      try {
+        const adminToken = jwtService.generateToken({
+          clientId: 'admin-sync-limit',
+          cpfCnpj: '00000000000',
+          name: 'Admin',
+          role: 'admin',
+        });
+        const res = await request(app)
+          .post('/api/auth/sync-users?limit=999999999')
+          .set('Authorization', `Bearer ${adminToken}`)
+          .send();
+
+        expect(res.status).toBe(200);
+        expect(query).toHaveBeenCalledWith('cliente', expect.objectContaining({ rp: '100' }));
+      } finally {
+        query.mockRestore();
+      }
     });
   });
 

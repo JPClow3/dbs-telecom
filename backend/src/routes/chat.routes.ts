@@ -5,14 +5,15 @@ import { CONFIG } from '../config/env.js';
 import { csatService } from '../modules/csat/csat.service.js';
 import type { DepartmentType } from '../modules/ai/ai.service.js';
 import { authMiddleware, enforceAntiIdor, optionalAuthMiddleware, requireAdmin } from '../middlewares/auth.middleware.js';
-import { sendApiError, asyncHandler } from './route.helpers.js';
+import { routeParam, sendApiError, asyncHandler } from './route.helpers.js';
+import { registerSseResponse } from '../app.js';
 
 export function registerChatRoutes(apiRouter: Router): void {
 /**
  * Saudação inicial personalizada (Anti-IDOR)
  */
 apiRouter.post('/chat/greeting', authMiddleware, enforceAntiIdor('clientId'), async (req: Request, res: Response) => {
-  const { clientId } = req.body;
+  const { clientId } = req.body ?? {};
   if (!clientId) {
     return res.status(400).json({ error: 'clientId obrigatório.' });
   }
@@ -33,7 +34,8 @@ apiRouter.post('/chat/greeting', authMiddleware, enforceAntiIdor('clientId'), as
  * mensagem persistida ou entrada na fila.
  */
 apiRouter.post('/chat/message', authMiddleware, enforceAntiIdor('clientId'), async (req: Request, res: Response) => {
-  const { sessionId, message, clientId, messageId } = req.body;
+  const { sessionId, message, clientId, messageId, clientMessageId: bodyClientMessageId } = req.body ?? {};
+  const stableMessageId = bodyClientMessageId || messageId;
 
   if (!message) {
     return res.status(400).json({ error: 'Mensagem não pode ser vazia.' });
@@ -51,7 +53,7 @@ apiRouter.post('/chat/message', authMiddleware, enforceAntiIdor('clientId'), asy
     if (sessionOwner && req.user?.role !== 'admin' && sessionOwner !== req.user?.clientId) {
       return res.status(403).json({ error: 'Acesso negado ao histórico de outro cliente.', code: 'CHAT_SESSION_FORBIDDEN' });
     }
-    const response = await chatService.processMessage(sid, message, targetClientId, { clientMessageId: messageId });
+    const response = await chatService.processMessage(sid, message, targetClientId, { clientMessageId: stableMessageId });
     return res.json(response);
   } catch (error: any) {
     return sendApiError(res, 'Erro no processamento da mensagem.', error);
@@ -62,7 +64,7 @@ apiRouter.post('/chat/message', authMiddleware, enforceAntiIdor('clientId'), asy
  * Recupera o histórico de mensagens persistidas no armazenamento configurado.
  */
 apiRouter.get('/chat/history/:sessionId', authMiddleware, asyncHandler(async (req: Request, res: Response) => {
-  const { sessionId } = req.params;
+  const sessionId = routeParam(req, "sessionId");
   const sessionOwner = await chatService.getSessionOwner(sessionId);
   if (!sessionOwner) {
     return res.status(404).json({ error: 'Sessão de atendimento não encontrada.', code: 'CHAT_SESSION_NOT_FOUND' });
@@ -97,7 +99,7 @@ apiRouter.all('/chat/message/stream', optionalAuthMiddleware, async (req: Reques
   const message = req.body?.message || (req.query.message as string);
   const sessionId = req.body?.sessionId || (req.query.sessionId as string);
   const requestedClientId = req.body?.clientId || (req.query.clientId as string);
-  const clientMessageId = (req.body?.messageId || req.query.messageId) as string | undefined;
+  const clientMessageId = (req.body?.clientMessageId || req.body?.messageId || req.query.clientMessageId || req.query.messageId) as string | undefined;
   if (req.user && requestedClientId && req.user.role !== 'admin' && requestedClientId !== req.user.clientId && requestedClientId !== 'me') {
     return res.status(403).json({ error: 'Acesso negado para outro cliente.', code: 'IDOR_FORBIDDEN' });
   }
@@ -123,6 +125,8 @@ apiRouter.all('/chat/message/stream', optionalAuthMiddleware, async (req: Reques
   res.setHeader('Connection', 'keep-alive');
   res.setHeader('X-Accel-Buffering', 'no');
   res.flushHeaders?.();
+  res.isSse = true;
+  registerSseResponse(res);
 
   /** Emite um evento SSE nomeado com payload JSON. */
   const sseSend = (event: string, data: Record<string, unknown>): void => {
@@ -195,7 +199,7 @@ const AUDIO_MIME_ALIASES = new Map<string, string>([
 const MAX_AUDIO_BASE64_LENGTH = Math.floor((10 * 1024 * 1024 * 4) / 3);
 
 apiRouter.post('/chat/audio', authMiddleware, enforceAntiIdor('clientId'), async (req: Request, res: Response) => {
-  const { audioBase64, mimeType, sessionId, clientId } = req.body;
+  const { audioBase64, mimeType, sessionId, clientId } = req.body ?? {};
 
   if (!audioBase64) {
     return res.status(400).json({ error: 'Áudio em base64 é obrigatório.' });
@@ -303,7 +307,7 @@ apiRouter.get('/chat/csat/stats', authMiddleware, requireAdmin, asyncHandler(asy
  * ⭐ Histórico de Avaliações por Cliente (Anti-IDOR)
  */
 apiRouter.get('/chat/csat/client/:clientId', authMiddleware, enforceAntiIdor('clientId'), asyncHandler(async (req: Request, res: Response) => {
-  const { clientId } = req.params;
+  const clientId = routeParam(req, "clientId");
   const targetClientId = clientId === 'me' ? req.user!.clientId : clientId;
   const page = Math.max(1, parseInt(req.query.page as string, 10) || 1);
   const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string, 10) || 20));

@@ -10,22 +10,22 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
-    "test": "tsx --test test/**/*.test.ts",
+    "test": "node scripts/run-tests.mjs",
     "typecheck": "node --stack-size=16384 ./node_modules/typescript/bin/tsc --noEmit"
   },
   "dependencies": {
     "@expo/metro-runtime": "~57.0.12",
-    "@react-native-async-storage/async-storage": "2.2.0",
+    "@react-native-async-storage/async-storage": "3.1.1",
     "@react-native-community/netinfo": "12.0.1",
-    "@react-navigation/bottom-tabs": "6.6.1",
-    "@react-navigation/native": "6.1.18",
-    "@react-navigation/native-stack": "6.11.0",
+    "@react-navigation/bottom-tabs": "7.20.0",
+    "@react-navigation/native": "^7.5.0",
+    "@react-navigation/native-stack": "7.18.10",
     "expo": "~57.0.15",
     "expo-asset": "~57.0.13",
     "expo-audio": "~57.0.4",
     "expo-clipboard": "~57.0.1",
     "expo-file-system": "~57.0.5",
-    "expo-haptics": "~57.0.1",
+    "expo-haptics": "~57.0.2",
     "expo-intent-launcher": "~57.0.1",
     "expo-local-authentication": "~57.0.2",
     "expo-secure-store": "~57.0.1",
@@ -38,16 +38,16 @@
     "react-native": "0.86.2",
     "react-native-qrcode-svg": "^6.3.21",
     "react-native-safe-area-context": "~5.7.0",
-    "react-native-screens": "~4.26.0",
+    "react-native-screens": "~4.27.0",
     "react-native-svg": "15.15.4",
     "react-native-web": "^0.21.2"
   },
   "devDependencies": {
     "@babel/core": "^7.20.0",
-    "@types/node": "^26.2.0",
+    "@types/node": "^26.4.0",
     "@types/react": "~19.2.4",
     "tsx": "^4.16.2",
-    "typescript": "~6.0.3"
+    "typescript": "~7.0.2"
   },
   "overrides": {
     "tar": "7.5.22",
@@ -55,7 +55,8 @@
     "uuid": "11.1.1",
     "metro": "0.84.5",
     "metro-config": "0.84.5",
-    "metro-transform-worker": "0.84.5"
+    "metro-transform-worker": "0.84.5",
+    "decode-uri-component": "0.5.0"
   },
   "private": true
 }

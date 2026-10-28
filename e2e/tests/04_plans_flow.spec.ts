@@ -53,14 +53,12 @@ test.describe('🚀 4. Plans & Commercial Catalog Flow', () => {
     await expect(page.getByText(/400 Mega|500 Mega|600 Mega|800 Mega/i).first()).toBeVisible({ timeout: 10000 });
   });
 
-  test('deve permitir copiar o link do programa Indique e Ganhe 50% OFF', async ({ page }) => {
+  test('deve bloquear o compartilhamento de indicação na prévia local', async ({ page }) => {
     const referralCard = page.getByText('Indique um Amigo e Ganhe 50% OFF');
     await expect(referralCard).toBeVisible();
-
-    const shareBtn = page.locator('div[style*="cursor: pointer"], div[role="button"]').filter({ has: page.locator('svg') }).nth(1);
-    if (await shareBtn.isVisible()) {
-      await shareBtn.click();
-    }
+    const shareBtn = page.getByRole('button', { name: /Compartilhar indicação — indisponível na prévia local/i });
+    await expect(shareBtn).toBeVisible();
+    await expect(shareBtn).toBeDisabled();
   });
 
   test('deve clicar em "Quero Contratar Este Plano" e navegar para o Chat', async ({ page }) => {
@@ -74,9 +72,6 @@ test.describe('🚀 4. Plans & Commercial Catalog Flow', () => {
     await expect(page.getByText('Davi • DBS Telecom').first()).toBeVisible({ timeout: 15000 });
 
     // Verifica que foi navegado para o chat (mensagem de interesse ou a aba de atendimento está ativa)
-    const chatTab = page.getByRole('tab', { name: /Atendimento/i });
-    await expect(chatTab).toHaveAttribute('aria-selected', 'true', { timeout: 5000 }).catch(() => {});
-
     // Verifica que a mensagem de contratação apareceu no histórico (com timeout maior para SSE)
     await expect(
       page.getByText(/Gostei do plano|contratar|plano/i).first()

@@ -111,6 +111,7 @@ describe('AIGuardrails Security & Robustness Suite', () => {
       const mockBundle: IXCContextBundle = {
         contracts: [],
         financial: {
+          status: 'AVAILABLE',
           hasOpenInvoices: false,
           openInvoicesCount: 0,
           invoices: [],

@@ -3,6 +3,7 @@ import { commercialService } from '../commercial/commercial.service.js';
 import { financialService } from '../financial/financial.service.js';
 import { supportService } from '../support/support.service.js';
 import { queueService } from '../queue/queue.service.js';
+import { ixcService } from '../ixc/ixc.service.js';
 import { chatRepository } from './chat.repository.js';
 import { generateMsgId, type ChatMessage, type ChatSession } from './chat.types.js';
 
@@ -113,6 +114,75 @@ export async function processChatMessage(
         'Planos Wi-Fi 6 📶',
         'Falar com atendente 👤',
       ],
+    };
+    await context.pushHistory(session, botMsg);
+    return botMsg;
+  }
+
+  // Gemini/OpenAI tool calls are only declarations until the authenticated
+  // conversation executes their structured action. Never trust a clientId
+  // supplied by the model; the route/session identity is authoritative.
+  if (classification.toolAction) {
+    if (!currentClientId) {
+      const error = new Error('Não foi possível identificar o cliente para executar a solicitação.');
+      (error as Error & { code?: string }).code = 'CLIENT_ID_REQUIRED';
+      throw error;
+    }
+
+    session.currentDepartment = classification.department;
+    try { await chatRepository.updateSession(session); } catch {}
+
+    if (classification.toolAction.type === 'CREATE_TICKET') {
+      const ticket = await ixcService.createTicket({
+        id_cliente: currentClientId,
+        assunto: classification.toolAction.subject,
+        mensagem: classification.toolAction.message,
+      });
+      if (!ticket.success || !ticket.protocolo) {
+        const error = new Error('O IXC não confirmou a abertura do chamado.');
+        (error as Error & { code?: string }).code = 'IXC_UNAVAILABLE';
+        throw error;
+      }
+      const botMsg: ChatMessage = {
+        id: generateMsgId('msg'),
+        sender: 'BOT',
+        text: ticket.simulated
+          ? `No modo demonstração, a abertura do chamado foi simulada para "${classification.toolAction.subject}".`
+          : `Chamado técnico confirmado no IXC para "${classification.toolAction.subject}". Nossa equipe dará continuidade ao atendimento.`,
+        timestamp: new Date().toISOString(),
+        department: 'SUPORTE',
+        aiProvider: classification.aiProvider,
+        aiModel: classification.aiModel,
+        guardrailApplied: classification.guardrailApplied,
+        quickOptions: ['Acompanhar chamado', 'Testar conexão', 'Voltar ao início'],
+        cards: { type: 'TICKET', ticketProtocol: ticket.protocolo },
+      };
+      await context.pushHistory(session, botMsg);
+      return botMsg;
+    }
+
+    const unblockRes = await financialService.unblockPromise(
+      currentClientId,
+      classification.toolAction.contractId,
+    );
+    if (!unblockRes.success || !unblockRes.protocolo) {
+      const error = new Error('O IXC não confirmou o desbloqueio em confiança.');
+      (error as Error & { code?: string }).code = 'IXC_UNAVAILABLE';
+      throw error;
+    }
+    const botMsg: ChatMessage = {
+      id: generateMsgId('msg'),
+      sender: 'BOT',
+      text: unblockRes.simulated
+        ? `No modo demonstração, o desbloqueio em confiança foi simulado. Protocolo: \`${unblockRes.protocolo}\`.`
+        : `⚡ **Desbloqueio em Confiança confirmado!**\n\n${unblockRes.message}\n\n📋 **Protocolo:** \`${unblockRes.protocolo}\`\n⏳ **Validade:** ${unblockRes.unblockUntil}`,
+      timestamp: new Date().toISOString(),
+      department: 'FINANCEIRO',
+      aiProvider: classification.aiProvider,
+      aiModel: classification.aiModel,
+      guardrailApplied: classification.guardrailApplied,
+      quickOptions: ['Ver faturas e PIX', 'Testar conexão', 'Voltar ao início'],
+      cards: { type: 'TICKET', ticketProtocol: unblockRes.protocolo },
     };
     await context.pushHistory(session, botMsg);
     return botMsg;

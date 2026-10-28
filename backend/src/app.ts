@@ -267,7 +267,7 @@ export function createApp(): Express {
 
     if (mobileDistPath) {
       app.use(express.static(mobileDistPath));
-      app.get('*', (req: Request, res: Response, next: NextFunction) => {
+      app.get('/{*splat}', (req: Request, res: Response, next: NextFunction) => {
         if (req.path.startsWith('/api') || req.path.startsWith('/docs')) return next();
         const indexPath = path.join(mobileDistPath, 'index.html');
         return fs.existsSync(indexPath) ? res.sendFile(indexPath) : next();

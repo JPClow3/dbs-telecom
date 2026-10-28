@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { CONFIG } from '../src/config/env.js';
 import { aiGuardrails } from '../src/modules/ai/ai.guardrails.js';
 import { ixcContextBuilder } from '../src/modules/ai/ixc-context.builder.js';
 import { aiService } from '../src/modules/ai/ai.service.js';
@@ -160,6 +161,19 @@ describe('🧠 AIService & Gemini Orchestrator Integration', () => {
     expect(attackResult.guardrailApplied).toBe(true);
     expect(attackResult.department).toBe('GERAL');
     expect(attackResult.friendlyMessage).toContain('DBS TELECOM');
+  });
+
+  it('mantém o limite de tamanho mesmo quando guardrails de conteúdo estão desativados', async () => {
+    const previous = CONFIG.ai.guardrailsEnabled;
+    CONFIG.ai.guardrailsEnabled = false;
+    try {
+      const result = await aiService.classifyMessage('x'.repeat(1501), { clientId: '2270' });
+      expect(result.guardrailApplied).toBe(true);
+      expect(result.guardrailReason).toMatch(/limite máximo/i);
+      expect(result.aiProvider).toBe('heuristic');
+    } finally {
+      CONFIG.ai.guardrailsEnabled = previous;
+    }
   });
 });
 
